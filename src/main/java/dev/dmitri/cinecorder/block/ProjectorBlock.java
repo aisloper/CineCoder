@@ -84,6 +84,13 @@ public class ProjectorBlock extends BaseEntityBlock {
 	@Override
 	protected InteractionResult useItemOn(ItemStack stack, BlockState state, Level level, BlockPos pos,
 			Player player, InteractionHand hand, BlockHitResult hitResult) {
+		// The vanilla dispatcher only calls useWithoutItem when useItemOn returns
+		// TRY_WITH_EMPTY_HAND. Handle the empty hand here so right-clicking with an empty
+		// hand actually plays/stops the projector on both the client and the server.
+		if (stack.isEmpty()) {
+			return useWithoutItem(state, level, pos, player, hitResult);
+		}
+
 		if (!(level.getBlockEntity(pos) instanceof ProjectorBlockEntity projector)) {
 			return InteractionResult.PASS;
 		}
