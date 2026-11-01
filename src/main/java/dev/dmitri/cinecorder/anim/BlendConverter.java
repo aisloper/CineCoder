@@ -1,11 +1,15 @@
 package dev.dmitri.cinecorder.anim;
 
+import java.io.BufferedReader;
+import java.io.BufferedWriter;
 import java.io.IOException;
 import java.io.InputStream;
+import java.io.InputStreamReader;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.StandardCopyOption;
+import java.nio.file.StandardOpenOption;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
@@ -27,7 +31,7 @@ import dev.dmitri.cinecorder.CineCorderConfig;
  */
 public final class BlendConverter {
 	private static final String SCRIPT_RESOURCE = "/assets/cinecorder/blender/cinecorder_export.py";
-	private static final int CACHE_VERSION = 2;
+	private static final int CACHE_VERSION = 4;
 	private static final Set<Path> PENDING = ConcurrentHashMap.newKeySet();
 	private static final Map<Path, String> ERRORS = new ConcurrentHashMap<>();
 	private static final ExecutorService EXECUTOR = Executors.newSingleThreadExecutor(runnable -> {
@@ -109,6 +113,7 @@ public final class BlendConverter {
 		command.add("--background");
 		command.add(blend.toAbsolutePath().toString());
 		command.add("--factory-startup");
+		command.add("--disable-autoexec");
 		command.add("--python-exit-code");
 		command.add("1");
 		command.add("--python");
@@ -118,15 +123,20 @@ public final class BlendConverter {
 		command.add(temp.toAbsolutePath().toString());
 		command.add("--all");
 		command.add("--step");
-		command.add("1");
+		command.add(String.valueOf(Math.max(1, config.blendFrameStep)));
 		command.add("--name");
 		command.add(baseName(blend));
 
-		CineCorder.LOGGER.info("Converting {} with Blender: {}", blend.getFileName(), config.blenderPath);
+		CineCorder.LOGGER.info("Converting {} with Blender (timeout {}s): {}", blend.getFileName(),
+				config.blenderTimeoutSeconds, config.blenderPath);
+		long started = System.currentTimeMillis();
 		Process process = new ProcessBuilder(command)
 				.redirectErrorStream(true)
-				.redirectOutput(ProcessBuilder.Redirect.appendTo(log.toFile()))
 				.start();
+
+		Thread pump = new Thread(() -> pumpOutput(process, log, blend), "CineCorder-Blender-Log");
+		pump.setDaemon(true);
+		pump.start();
 
 		if (!process.waitFor(Math.max(5, config.blenderTimeoutSeconds), TimeUnit.SECONDS)) {
 			process.destroyForcibly();
@@ -141,10 +151,36 @@ public final class BlendConverter {
 			return;
 		}
 
+		try {
+			pump.join(2000);
+		} catch (InterruptedException ignored) {
+			Thread.currentThread().interrupt();
+		}
+
 		Files.move(temp, target, StandardCopyOption.REPLACE_EXISTING);
 		ERRORS.remove(blend);
 		Files.deleteIfExists(log);
-		CineCorder.LOGGER.info("Converted {} -> {}", blend.getFileName(), target.getFileName());
+		CineCorder.LOGGER.info("Converted {} -> {} in {} ms", blend.getFileName(),
+				target.getFileName(), System.currentTimeMillis() - started);
+	}
+
+	/** Copies Blender's output to the log while echoing progress to the server console. */
+	private static void pumpOutput(Process process, Path log, Path blend) {
+		try (BufferedReader reader = new BufferedReader(
+				new InputStreamReader(process.getInputStream(), StandardCharsets.UTF_8));
+				BufferedWriter writer = Files.newBufferedWriter(log, StandardCharsets.UTF_8,
+						StandardOpenOption.CREATE, StandardOpenOption.APPEND)) {
+			String line;
+			while ((line = reader.readLine()) != null) {
+				writer.write(line);
+				writer.newLine();
+				if (line.startsWith("CINECORDER_PROGRESS ")) {
+					CineCorder.LOGGER.info("{} conversion: {}", blend.getFileName(),
+							line.substring("CINECORDER_PROGRESS ".length()));
+				}
+			}
+		} catch (IOException ignored) {
+		}
 	}
 
 	private static String cacheName(Path blend) throws IOException {

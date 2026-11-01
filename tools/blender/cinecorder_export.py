@@ -43,7 +43,7 @@ from mathutils import Matrix, Vector
 bl_info = {
     "name": "CineCorder Animation Exporter",
     "author": "dmitri",
-    "version": (1, 1, 0),
+    "version": (1, 2, 0),
     "blender": (4, 0, 0),
     "location": "File > Export > CineCorder Animation (.bcam)",
     "description": "Export animated meshes, armatures and the camera as a .bcam file",
@@ -63,10 +63,6 @@ def to_mc(vector):
 def mc_matrix(matrix):
     """Blender 4x4 -> Minecraft 4x4."""
     return BASIS @ matrix @ BASIS.inverted()
-
-
-def mc_rotation(matrix3):
-    return BASIS3 @ matrix3 @ BASIS3.transposed()
 
 
 def trs_from_mc(matrix, scale=1.0, offset=(0.0, 0.0, 0.0), add_offset=True):
@@ -138,36 +134,48 @@ def find_armature(obj):
     return None
 
 
-def build_bone_nodes(armature, frames, scene, fps, frame_start, scale, offset):
+def bone_skeleton(armature, scale, offset):
+    """Creates the node skeletons for an armature (keys are filled while sampling)."""
     bones = ordered_bones(armature)
     bone_index = {bone.name: index for index, (bone, _) in enumerate(bones)}
-    armature_world = armature.matrix_world
     nodes = []
 
     for index, (bone, parent) in enumerate(bones):
-        keys = []
-        for frame in frames:
-            scene.frame_set(frame)
-            pose = armature_world @ armature.pose.bones[bone.name].matrix
-            if parent >= 0:
-                parent_bone = bones[parent][0]
-                parent_pose = armature_world @ armature.pose.bones[parent_bone.name].matrix
-                local = parent_pose.inverted() @ pose
-            else:
-                local = pose
-            key = trs_from_mc(mc_matrix(local), scale, offset, add_offset=(parent < 0))
-            key["t"] = round((frame - frame_start) / fps, 5)
-            keys.append(key)
-
         nodes.append({
             "name": bone.name,
             "parent": parent,
             "pivot": [0.0, 0.0, 0.0],
             "parts": [],
-            "keys": compress(keys),
+            "keys": [],
         })
 
-    return nodes, bone_index
+    return {
+        "armature": armature,
+        "bones": bones,
+        "index": bone_index,
+        "nodes": nodes,
+        "keys": [[] for _ in bones],
+    }
+
+
+def sample_armature(data, scene, time, scale, offset):
+    """Appends one key per bone for the current (already evaluated) frame."""
+    armature = data["armature"]
+    armature_world = armature.matrix_world
+    bones = data["bones"]
+
+    # Cache the evaluated pose matrices once per frame instead of per bone/parent pair.
+    poses = [armature_world @ armature.pose.bones[bone.name].matrix for bone, _ in bones]
+
+    for index, (bone, parent) in enumerate(bones):
+        pose = poses[index]
+        if parent >= 0:
+            local = poses[parent].inverted() @ pose
+        else:
+            local = pose
+        key = trs_from_mc(mc_matrix(local), scale, offset, add_offset=(parent < 0))
+        key["t"] = time
+        data["keys"][index].append(key)
 
 
 def skeletal_parts(obj, armature, bone_index, scale, scene, frame_start):
@@ -214,7 +222,7 @@ def skeletal_parts(obj, armature, bone_index, scale, scene, frame_start):
     return result
 
 
-def build_object_node(obj, frames, scene, fps, frame_start, scale, offset):
+def object_node(obj, scale):
     corners = [Vector(corner) for corner in obj.bound_box]
     local_min = Vector((min(c.x for c in corners), min(c.y for c in corners), min(c.z for c in corners)))
     local_max = Vector((max(c.x for c in corners), max(c.y for c in corners), max(c.z for c in corners)))
@@ -222,13 +230,6 @@ def build_object_node(obj, frames, scene, fps, frame_start, scale, offset):
     b = to_mc(local_max)
     low = [min(a[i], b[i]) * scale for i in range(3)]
     high = [max(a[i], b[i]) * scale for i in range(3)]
-
-    keys = []
-    for frame in frames:
-        scene.frame_set(frame)
-        key = trs_from_mc(mc_matrix(obj.matrix_world), scale, offset)
-        key["t"] = round((frame - frame_start) / fps, 5)
-        keys.append(key)
 
     return {
         "name": obj.name,
@@ -239,7 +240,24 @@ def build_object_node(obj, frames, scene, fps, frame_start, scale, offset):
             "to": [round(value, 5) for value in high],
             "color": base_color(obj),
         }],
-        "keys": compress(keys),
+        "keys": [],
+    }
+
+
+def camera_key(camera, time, scale, offset):
+    matrix = camera.matrix_world
+    position = Vector((
+        matrix.translation.x * scale + offset[0],
+        matrix.translation.z * scale + offset[1],
+        -matrix.translation.y * scale + offset[2],
+    ))
+    direction = to_mc(matrix.to_3x3() @ Vector((0.0, 0.0, -1.0)))
+    direction.normalize()
+    look = position + direction * 2.0
+    return {
+        "t": time,
+        "pos": [round(value, 5) for value in position],
+        "look": [round(value, 5) for value in look],
     }
 
 
@@ -254,7 +272,11 @@ def export_animation(context, filepath, use_selection=True, step=1, scene_scale=
 
     meshes = [obj for obj in context.selected_objects if obj.type == "MESH" and not obj.hide_render]
     if not use_selection or not meshes:
-        meshes = [obj for obj in scene.objects if obj.type == "MESH" and not obj.hide_render]
+        # context.view_layer.objects respects excluded collections; skipping hidden objects keeps
+        # conversion fast on big .blend files that also contain props/studio geometry.
+        meshes = [obj for obj in context.view_layer.objects
+                  if obj.type == "MESH" and not obj.hide_render and not obj.hide_viewport
+                  and len(obj.data.vertices) > 0]
     if not meshes:
         raise RuntimeError("No mesh objects to export")
 
@@ -262,19 +284,14 @@ def export_animation(context, filepath, use_selection=True, step=1, scene_scale=
     if frames[-1] != frame_end:
         frames.append(frame_end)
 
-    armatures = {}
+    armature_data = {}
     for obj in meshes:
         armature = find_armature(obj)
-        if armature is not None:
-            armatures[armature.name] = armature
+        if armature is not None and armature.name not in armature_data:
+            armature_data[armature.name] = bone_skeleton(armature, scene_scale, offset)
 
-    armature_data = {}
-    for armature_name, armature in armatures.items():
-        nodes, bone_index = build_bone_nodes(armature, frames, scene, fps, frame_start,
-                                             scene_scale, offset)
-        armature_data[armature_name] = {"nodes": nodes, "index": bone_index, "armature": armature}
-
-    extra_nodes = []
+    # Skeletal chunks are computed once, in the rest pose.
+    extra_objects = []
     for obj in meshes:
         armature = find_armature(obj)
         if armature is not None and armature.name in armature_data:
@@ -283,22 +300,49 @@ def export_animation(context, filepath, use_selection=True, step=1, scene_scale=
             if parts:
                 for bone_name, bone_parts in parts.items():
                     data["nodes"][data["index"][bone_name]]["parts"].extend(bone_parts)
-            else:
-                # Mesh parented to a bone but without usable vertex groups: bake its own transform.
-                extra_nodes.append(build_object_node(obj, frames, scene, fps, frame_start,
-                                                     scene_scale, offset))
-        else:
-            extra_nodes.append(build_object_node(obj, frames, scene, fps, frame_start,
-                                                 scene_scale, offset))
+                continue
+        # No usable armature/vertex groups: bake the object's own world transform.
+        extra_objects.append((object_node(obj, scene_scale), obj))
+
+    camera = scene.camera if include_camera else None
+    camera_keys = []
+    total = len(frames)
+    last_progress = -1
+
+    # ONE depsgraph update per frame. Sampling bones/objects/camera inside the same loop is
+    # what makes conversion fast: the old implementation called frame_set once per bone per
+    # frame, which is O(bones * frames) dependency graph evaluations.
+    for number, frame in enumerate(frames):
+        scene.frame_set(frame)
+        time = round((frame - frame_start) / fps, 5)
+
+        for data in armature_data.values():
+            sample_armature(data, scene, time, scene_scale, offset)
+
+        for node, obj in extra_objects:
+            key = trs_from_mc(mc_matrix(obj.matrix_world), scene_scale, offset)
+            key["t"] = time
+            node["keys"].append(key)
+
+        if camera is not None:
+            camera_keys.append(camera_key(camera, time, scene_scale, offset))
+
+        progress = number * 10 // total
+        if progress != last_progress:
+            last_progress = progress
+            print("CINECORDER_PROGRESS %d/%d" % (number + 1, total), flush=True)
 
     nodes = []
     for data in armature_data.values():
         base = len(nodes)
-        for node in data["nodes"]:
+        for index, node in enumerate(data["nodes"]):
+            node["keys"] = compress(data["keys"][index])
             if node["parent"] >= 0:
                 node["parent"] += base
             nodes.append(node)
-    nodes.extend(extra_nodes)
+    for node, _ in extra_objects:
+        node["keys"] = compress(node["keys"])
+        nodes.append(node)
 
     document = {
         "format": "cinecorder/1",
@@ -309,25 +353,7 @@ def export_animation(context, filepath, use_selection=True, step=1, scene_scale=
         "nodes": nodes,
     }
 
-    camera = scene.camera if include_camera else None
     if camera is not None:
-        camera_keys = []
-        for frame in frames:
-            scene.frame_set(frame)
-            matrix = camera.matrix_world
-            position = Vector((
-                matrix.translation.x * scene_scale + offset[0],
-                matrix.translation.z * scene_scale + offset[1],
-                -matrix.translation.y * scene_scale + offset[2],
-            ))
-            direction = to_mc(matrix.to_3x3() @ Vector((0.0, 0.0, -1.0)))
-            direction.normalize()
-            look = position + direction * 2.0
-            camera_keys.append({
-                "t": round((frame - frame_start) / fps, 5),
-                "pos": [round(value, 5) for value in position],
-                "look": [round(value, 5) for value in look],
-            })
         document["camera"] = {
             "fov": float(camera.data.angle_x * 180.0 / math.pi),
             "keys": camera_keys,

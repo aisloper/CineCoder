@@ -18,7 +18,8 @@ public final class CineCorderConfig {
 	private static CineCorderConfig instance;
 
 	public String blenderPath = "blender";
-	public int blenderTimeoutSeconds = 120;
+	public int blenderTimeoutSeconds = 300;
+	public int blendFrameStep = 1;
 	public boolean convertBlendFiles = true;
 
 	public static Path file() {
