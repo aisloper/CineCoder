@@ -10,7 +10,7 @@
 	"contact": {
 		"homepage": "https://example.invalid/cinecorder"
 	},
-	"license": "MIT",
+	"license": "GPL-2.0-only",
 	"icon": "assets/cinecorder/icon.png",
 	"environment": "*",
 	"entrypoints": {
