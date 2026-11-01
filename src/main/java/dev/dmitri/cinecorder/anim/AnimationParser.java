@@ -103,8 +103,26 @@ public final class AnimationParser {
 						}
 						indices[v] = index;
 					}
+					int vertexCount2 = vertices.length / 3;
+					int[] boneIndices = null;
+					float[] boneWeights = null;
+					JsonArray weightArray = optArray(meshObject, "weights");
+					if (weightArray != null) {
+						if (weightArray.size() != vertexCount2 * 8) {
+							throw new AnimationException("Mesh weights must contain 8 values per vertex");
+						}
+						boneIndices = new int[vertexCount2 * 4];
+						boneWeights = new float[vertexCount2 * 4];
+						for (int v = 0; v < vertexCount2 * 4; v++) {
+							boneIndices[v] = weightArray.get(v * 2).getAsInt();
+							boneWeights[v] = weightArray.get(v * 2 + 1).getAsFloat();
+							if (boneIndices[v] < 0) {
+								throw new AnimationException("Mesh bone index must be >= 0");
+							}
+						}
+					}
 					meshes.add(new AnimationClip.Mesh(vertices, indices,
-							optColor(meshObject, "color", 0xFFCCCCCC)));
+							optColor(meshObject, "color", 0xFFCCCCCC), boneIndices, boneWeights));
 				}
 			}
 
@@ -124,8 +142,21 @@ public final class AnimationParser {
 				}
 			}
 
+			org.joml.Matrix4f bind = null;
+			JsonArray bindArray = optArray(nodeObject, "bind");
+			if (bindArray != null) {
+				if (bindArray.size() != 16) {
+					throw new AnimationException("'bind' must contain 16 numbers");
+				}
+				float[] values = new float[16];
+				for (int b = 0; b < 16; b++) {
+					values[b] = (float) bindArray.get(b).getAsDouble();
+				}
+				bind = new org.joml.Matrix4f().set(values);
+			}
+
 			nodes.add(new AnimationClip.Node(nodeName, parent, pivot, parts, meshes,
-					AnimationClip.keysFrom(keys)));
+					AnimationClip.keysFrom(keys), bind));
 		}
 
 		AnimationClip.CameraTrack camera = null;
@@ -156,6 +187,21 @@ public final class AnimationParser {
 	}
 
 	private static Quaternionf parseRotation(JsonObject object) {
+		JsonElement quaternion = object.get("rotq");
+		if (quaternion != null && quaternion.isJsonArray()) {
+			JsonArray array = quaternion.getAsJsonArray();
+			if (array.size() >= 4) {
+				Quaternionf q = new Quaternionf(
+						(float) array.get(0).getAsDouble(),
+						(float) array.get(1).getAsDouble(),
+						(float) array.get(2).getAsDouble(),
+						(float) array.get(3).getAsDouble());
+				if (q.lengthSquared() > 1.0e-8f) {
+					return q.normalize();
+				}
+			}
+		}
+
 		JsonElement element = object.get("rot");
 		if (element == null || element.isJsonNull()) {
 			return new Quaternionf();

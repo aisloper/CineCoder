@@ -61,18 +61,28 @@ def to_mc(vector):
 
 
 def mc_matrix(matrix):
-    """Blender 4x4 -> Minecraft 4x4."""
-    return BASIS @ matrix @ BASIS.inverted()
+    """Blender 4x4 -> Minecraft 4x4.
+
+    to_mc() maps Blender -> Minecraft as BASIS^-1, so matrices must be conjugated the
+    same way: BASIS^-1 * M * BASIS. Using the opposite convention made vertices and
+    transforms disagree and twisted skinned models.
+    """
+    return BASIS.inverted() @ matrix @ BASIS
 
 
 def trs_from_mc(matrix, scale=1.0, offset=(0.0, 0.0, 0.0), add_offset=True):
     location, rotation, size = matrix.decompose()
     euler = rotation.to_euler("XYZ")
+    rotation.normalize()
     ox, oy, oz = offset if add_offset else (0.0, 0.0, 0.0)
     return {
         "pos": [round(location.x * scale + ox, 5),
                 round(location.y * scale + oy, 5),
                 round(location.z * scale + oz, 5)],
+        # Quaternion is authoritative: Blender's Euler XYZ order does not match JOML's
+        # rotationXYZ order, which used to twist compound bone rotations.
+        "rotq": [round(rotation.x, 7), round(rotation.y, 7), round(rotation.z, 7),
+                 round(rotation.w, 7)],
         "rot": [round(math.degrees(euler.x), 4),
                 round(math.degrees(euler.y), 4),
                 round(math.degrees(euler.z), 4)],
@@ -90,6 +100,10 @@ def material_color(material):
         color = material.diffuse_color
         return [float(color[0]), float(color[1]), float(color[2]), 1.0]
     return [0.8, 0.8, 0.8, 1.0]
+
+
+def matrix_to_list(matrix):
+    return [round(float(matrix[row][col]), 6) for col in range(4) for row in range(4)]
 
 
 def base_color(obj):
@@ -247,19 +261,26 @@ def find_armature(obj):
     return None
 
 
-def bone_skeleton(armature, scale, offset):
+def bone_skeleton(armature, scale, offset, scene, frame_start):
     """Creates the node skeletons for an armature (keys are filled while sampling)."""
+    scene.frame_set(frame_start)
     bones = ordered_bones(armature)
     bone_index = {bone.name: index for index, (bone, _) in enumerate(bones)}
     nodes = []
 
     for index, (bone, parent) in enumerate(bones):
+        bind = mc_matrix(armature.matrix_world @ bone.matrix_local).inverted()
+        # Uniform scene scale: bind translations scale together with the vertices.
+        bind[0][3] *= scale
+        bind[1][3] *= scale
+        bind[2][3] *= scale
         nodes.append({
             "name": bone.name,
             "parent": parent,
             "pivot": [0.0, 0.0, 0.0],
             "parts": [],
             "meshes": [],
+            "bind": matrix_to_list(bind),
             "keys": [],
         })
 
@@ -359,6 +380,65 @@ def object_node(obj, scale):
     }
 
 
+def build_skinned_mesh(obj, armature, bone_index, scale, scene, frame_start):
+    """Smooth-skinned triangles in world rest space plus per-vertex weights."""
+    scene.frame_set(frame_start)
+    mesh = obj.data
+    mesh.calc_loop_triangles()
+    group_names = {group.index: group.name for group in obj.vertex_groups}
+    object_world = obj.matrix_world
+
+    vertex_weights = {}
+    for vertex in mesh.vertices:
+        influences = []
+        for element in vertex.groups:
+            name = group_names.get(element.group)
+            if name in bone_index and element.weight > 0.001:
+                influences.append((bone_index[name], element.weight))
+        influences.sort(key=lambda item: item[1], reverse=True)
+        influences = influences[:4]
+        total = sum(weight for _, weight in influences)
+        if total > 0.0:
+            influences = [(bone, weight / total) for bone, weight in influences]
+        vertex_weights[vertex.index] = influences
+
+    groups = {}
+    for triangle in mesh.loop_triangles:
+        groups.setdefault(triangle.material_index, []).append(tuple(triangle.vertices))
+
+    result = []
+    for material_index, triangles in groups.items():
+        index_map = {}
+        vertices = []
+        indices = []
+        weights = []
+        for triangle in triangles:
+            for vertex_index in triangle:
+                mapped = index_map.get(vertex_index)
+                if mapped is None:
+                    mapped = len(index_map)
+                    index_map[vertex_index] = mapped
+                    co = to_mc(object_world @ mesh.vertices[vertex_index].co)
+                    vertices.extend([round(co.x * scale, 5), round(co.y * scale, 5),
+                                     round(co.z * scale, 5)])
+                    influences = vertex_weights.get(vertex_index, [])
+                    for slot in range(4):
+                        if slot < len(influences):
+                            weights.extend([int(influences[slot][0]),
+                                            round(float(influences[slot][1]), 5)])
+                        else:
+                            weights.extend([0, 0.0])
+                indices.append(mapped)
+        if indices:
+            result.append({
+                "vertices": vertices,
+                "indices": indices,
+                "weights": weights,
+                "color": object_material_color(obj, material_index),
+            })
+    return result
+
+
 def camera_key(camera, time, scale, offset):
     matrix = camera.matrix_world
     position = Vector((
@@ -404,7 +484,7 @@ def export_animation(context, filepath, use_selection=True, step=1, scene_scale=
     for obj in meshes:
         armature = find_armature(obj)
         if armature is not None and armature.name not in armature_data:
-            armature_data[armature.name] = bone_skeleton(armature, scene_scale, offset)
+            armature_data[armature.name] = bone_skeleton(armature, scene_scale, offset, scene, frame_start)
 
     # Decide which objects get real triangles. Big detailed props (coffee machines, vehicles)
     # are rendered as meshes; tiny background objects stay boxes to keep the scene affordable.
@@ -413,6 +493,10 @@ def export_animation(context, filepath, use_selection=True, step=1, scene_scale=
     if mesh_detail != "boxes":
         candidates = []
         for obj in meshes:
+            # Skinned meshes are always exported as smooth meshes and must not eat the
+            # triangle budget meant for static props (sabers, backdrops, machines).
+            if find_armature(obj) is not None:
+                continue
             tris = triangle_count(obj)
             if tris > 0:
                 candidates.append((object_volume(obj), tris, obj))
@@ -426,22 +510,24 @@ def export_animation(context, filepath, use_selection=True, step=1, scene_scale=
             mesh_objects.add(obj.name)
             remaining -= tris
 
-    # Skeletal chunks are computed once, in the rest pose.
+    # Smooth-skinned meshes: one node per object, geometry in world rest space, per-vertex
+    # weights referencing the armature's bone nodes. Rigid boxes are no longer used for skins.
+    skinned_nodes = []
     extra_objects = []
     for obj in meshes:
         armature = find_armature(obj)
         if armature is not None and armature.name in armature_data:
             data = armature_data[armature.name]
-            if obj.name in mesh_objects:
-                bone_meshes = skinned_mesh_data(obj, armature, data["index"], scene_scale, scene, frame_start)
-                if bone_meshes:
-                    for bone_name, meshes_for_bone in bone_meshes.items():
-                        data["nodes"][data["index"][bone_name]]["meshes"].extend(meshes_for_bone)
-                    continue
-            parts = skeletal_parts(obj, armature, data["index"], scene_scale, scene, frame_start)
-            if parts:
-                for bone_name, bone_parts in parts.items():
-                    data["nodes"][data["index"][bone_name]]["parts"].extend(bone_parts)
+            smooth = build_skinned_mesh(obj, armature, data["index"], scene_scale, scene, frame_start)
+            if smooth:
+                skinned_nodes.append(({
+                    "name": obj.name,
+                    "parent": -1,
+                    "pivot": [0.0, 0.0, 0.0],
+                    "parts": [],
+                    "meshes": smooth,
+                    "keys": [],
+                }, armature.name))
                 continue
         # No usable armature/vertex groups: bake the object's own world transform.
         node = object_node(obj, scene_scale)
@@ -481,13 +567,24 @@ def export_animation(context, filepath, use_selection=True, step=1, scene_scale=
             print("CINECORDER_PROGRESS %d/%d" % (number + 1, total), flush=True)
 
     nodes = []
-    for data in armature_data.values():
+    armature_bases = {}
+    for armature_name, data in armature_data.items():
         base = len(nodes)
+        armature_bases[armature_name] = base
         for index, node in enumerate(data["nodes"]):
             node["keys"] = compress(data["keys"][index])
             if node["parent"] >= 0:
                 node["parent"] += base
             nodes.append(node)
+
+    for node, armature_name in skinned_nodes:
+        base = armature_bases.get(armature_name, 0)
+        for mesh in node["meshes"]:
+            weights = mesh["weights"]
+            for i in range(0, len(weights), 2):
+                weights[i] += base
+        nodes.append(node)
+
     for node, _ in extra_objects:
         node["keys"] = compress(node["keys"])
         nodes.append(node)

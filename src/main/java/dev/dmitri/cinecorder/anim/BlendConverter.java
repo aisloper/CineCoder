@@ -31,7 +31,7 @@ import dev.dmitri.cinecorder.CineCorderConfig;
  */
 public final class BlendConverter {
 	private static final String SCRIPT_RESOURCE = "/assets/cinecorder/blender/cinecorder_export.py";
-	private static final int CACHE_VERSION = 5;
+	private static final int CACHE_VERSION = 7;
 	private static final Set<Path> PENDING = ConcurrentHashMap.newKeySet();
 	private static final Map<Path, String> ERRORS = new ConcurrentHashMap<>();
 	private static final ExecutorService EXECUTOR = Executors.newSingleThreadExecutor(runnable -> {

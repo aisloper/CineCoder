@@ -108,26 +108,104 @@ public final class SceneRenderer {
 
 	private static void drawNodes(AnimationClip clip, Matrix4f[] matrices, Matrix4f basePose,
 			VertexConsumer buffer, int light) {
+		// Precompute pose * inverseBind for every skinned bone once per frame.
+		Matrix4f[] skin = null;
+		for (int index = 0; index < clip.nodes().size(); index++) {
+			Matrix4f bind = clip.nodes().get(index).bind();
+			if (bind != null) {
+				if (skin == null) {
+					skin = new Matrix4f[clip.nodes().size()];
+				}
+				skin[index] = new Matrix4f(matrices[index]).mul(bind);
+			}
+		}
+
 		Vector3f a = new Vector3f();
 		Vector3f b = new Vector3f();
 		Vector3f c = new Vector3f();
 		Vector3f d = new Vector3f();
 
 		for (int index = 0; index < clip.nodes().size(); index++) {
+			AnimationClip.Node node = clip.nodes().get(index);
 			Matrix4f matrix = new Matrix4f(basePose).mul(matrices[index]);
 
-			for (AnimationClip.Part part : clip.nodes().get(index).parts()) {
+			for (AnimationClip.Part part : node.parts()) {
 				drawBox(buffer, matrix, part, light, a, b, c, d);
 			}
-			for (AnimationClip.Mesh mesh : clip.nodes().get(index).meshes()) {
-				drawMesh(buffer, matrix, mesh, light, a, b, c);
+			for (AnimationClip.Mesh mesh : node.meshes()) {
+				if (mesh.skinned() && skin != null) {
+					drawSkinnedMesh(buffer, basePose, skin, mesh, light);
+				} else {
+					drawMesh(buffer, basePose, matrices[index], mesh, light);
+				}
 			}
 		}
 	}
 
-	private static void drawMesh(VertexConsumer buffer, Matrix4f matrix, AnimationClip.Mesh mesh,
-			int light, Vector3f a, Vector3f b, Vector3f c) {
+	private static void drawMesh(VertexConsumer buffer, Matrix4f basePose, Matrix4f nodeMatrix,
+			AnimationClip.Mesh mesh, int light) {
 		float[] vertices = mesh.vertices();
+		int count = vertices.length / 3;
+		float[] positions = new float[count * 3];
+		Vector3f point = new Vector3f();
+
+		for (int v = 0; v < count; v++) {
+			point.set(vertices[v * 3], vertices[v * 3 + 1], vertices[v * 3 + 2]);
+			nodeMatrix.transformPosition(point);
+			basePose.transformPosition(point);
+			positions[v * 3] = point.x;
+			positions[v * 3 + 1] = point.y;
+			positions[v * 3 + 2] = point.z;
+		}
+
+		emitMesh(buffer, mesh, positions, light);
+	}
+
+	private static void drawSkinnedMesh(VertexConsumer buffer, Matrix4f basePose,
+			Matrix4f[] skin, AnimationClip.Mesh mesh, int light) {
+		float[] vertices = mesh.vertices();
+		int[] boneIndices = mesh.boneIndices();
+		float[] boneWeights = mesh.boneWeights();
+		int count = vertices.length / 3;
+		float[] positions = new float[count * 3];
+		Vector3f point = new Vector3f();
+
+		for (int v = 0; v < count; v++) {
+			float x = vertices[v * 3];
+			float y = vertices[v * 3 + 1];
+			float z = vertices[v * 3 + 2];
+			float rx = 0.0f;
+			float ry = 0.0f;
+			float rz = 0.0f;
+
+			for (int influence = 0; influence < 4; influence++) {
+				float weight = boneWeights[v * 4 + influence];
+				if (weight <= 0.0f) {
+					continue;
+				}
+				int bone = boneIndices[v * 4 + influence];
+				if (bone < 0 || bone >= skin.length || skin[bone] == null) {
+					continue;
+				}
+				point.set(x, y, z);
+				skin[bone].transformPosition(point);
+				rx += weight * point.x;
+				ry += weight * point.y;
+				rz += weight * point.z;
+			}
+
+			point.set(rx, ry, rz);
+			basePose.transformPosition(point);
+			positions[v * 3] = point.x;
+			positions[v * 3 + 1] = point.y;
+			positions[v * 3 + 2] = point.z;
+		}
+
+		emitMesh(buffer, mesh, positions, light);
+	}
+
+	private static void emitMesh(VertexConsumer buffer, AnimationClip.Mesh mesh, float[] positions,
+			int light) {
 		int[] indices = mesh.indices();
 		int color = mesh.argb();
 
@@ -135,19 +213,22 @@ public final class SceneRenderer {
 			int ia = indices[i] * 3;
 			int ib = indices[i + 1] * 3;
 			int ic = indices[i + 2] * 3;
-			a.set(vertices[ia], vertices[ia + 1], vertices[ia + 2]);
-			b.set(vertices[ib], vertices[ib + 1], vertices[ib + 2]);
-			c.set(vertices[ic], vertices[ic + 1], vertices[ic + 2]);
-			matrix.transformPosition(a);
-			matrix.transformPosition(b);
-			matrix.transformPosition(c);
+			float ax = positions[ia];
+			float ay = positions[ia + 1];
+			float az = positions[ia + 2];
+			float bx = positions[ib];
+			float by = positions[ib + 1];
+			float bz = positions[ib + 2];
+			float cx = positions[ic];
+			float cy = positions[ic + 1];
+			float cz = positions[ic + 2];
 
-			float abx = b.x - a.x;
-			float aby = b.y - a.y;
-			float abz = b.z - a.z;
-			float acx = c.x - a.x;
-			float acy = c.y - a.y;
-			float acz = c.z - a.z;
+			float abx = bx - ax;
+			float aby = by - ay;
+			float abz = bz - az;
+			float acx = cx - ax;
+			float acy = cy - ay;
+			float acz = cz - az;
 			float nx = aby * acz - abz * acy;
 			float ny = abz * acx - abx * acz;
 			float nz = abx * acy - aby * acx;
@@ -159,21 +240,22 @@ public final class SceneRenderer {
 			ny /= length;
 			nz /= length;
 
-			triangle(buffer, a, b, c, nx, ny, nz, color, light);
-			// Most Blender materials are double-sided; draw the back face as well.
-			triangle(buffer, a, c, b, -nx, -ny, -nz, color, light);
+			triangle(buffer, ax, ay, az, bx, by, bz, cx, cy, cz, nx, ny, nz, color, light);
+			// Blender materials are commonly double-sided.
+			triangle(buffer, ax, ay, az, cx, cy, cz, bx, by, bz, -nx, -ny, -nz, color, light);
 		}
 	}
 
-	private static void triangle(VertexConsumer buffer, Vector3f a, Vector3f b, Vector3f c,
+	private static void triangle(VertexConsumer buffer, float ax, float ay, float az,
+			float bx, float by, float bz, float cx, float cy, float cz,
 			float nx, float ny, float nz, int color, int light) {
-		buffer.addVertex(a.x, a.y, a.z, color, 0.0f, 0.0f, OverlayTexture.NO_OVERLAY, light,
+		buffer.addVertex(ax, ay, az, color, 0.0f, 0.0f, OverlayTexture.NO_OVERLAY, light,
 				nx, ny, nz);
-		buffer.addVertex(b.x, b.y, b.z, color, 1.0f, 0.0f, OverlayTexture.NO_OVERLAY, light,
+		buffer.addVertex(bx, by, bz, color, 1.0f, 0.0f, OverlayTexture.NO_OVERLAY, light,
 				nx, ny, nz);
-		buffer.addVertex(c.x, c.y, c.z, color, 1.0f, 1.0f, OverlayTexture.NO_OVERLAY, light,
+		buffer.addVertex(cx, cy, cz, color, 1.0f, 1.0f, OverlayTexture.NO_OVERLAY, light,
 				nx, ny, nz);
-		buffer.addVertex(c.x, c.y, c.z, color, 0.0f, 1.0f, OverlayTexture.NO_OVERLAY, light,
+		buffer.addVertex(cx, cy, cz, color, 0.0f, 1.0f, OverlayTexture.NO_OVERLAY, light,
 				nx, ny, nz);
 	}
 

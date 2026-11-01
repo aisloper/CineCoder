@@ -102,15 +102,17 @@ public final class AnimationClip {
 		private final List<Part> parts;
 		private final List<Mesh> meshes;
 		private final List<Key> keys;
+		private final Matrix4f bind;
 
 		public Node(String name, int parent, Vector3f pivot, List<Part> parts, List<Mesh> meshes,
-				List<Key> keys) {
+				List<Key> keys, Matrix4f bind) {
 			this.name = name;
 			this.parent = parent;
 			this.pivot = pivot;
 			this.parts = List.copyOf(parts);
 			this.meshes = List.copyOf(meshes);
 			this.keys = List.copyOf(keys);
+			this.bind = bind;
 		}
 
 		public String name() {
@@ -127,6 +129,10 @@ public final class AnimationClip {
 
 		public List<Mesh> meshes() {
 			return meshes;
+		}
+
+		public Matrix4f bind() {
+			return bind;
 		}
 
 		public List<Key> keys() {
@@ -185,11 +191,16 @@ public final class AnimationClip {
 		private final float[] vertices;
 		private final int[] indices;
 		private final int argb;
+		private final int[] boneIndices;
+		private final float[] boneWeights;
 
-		public Mesh(float[] vertices, int[] indices, int argb) {
+		public Mesh(float[] vertices, int[] indices, int argb, int[] boneIndices,
+				float[] boneWeights) {
 			this.vertices = vertices;
 			this.indices = indices;
 			this.argb = argb;
+			this.boneIndices = boneIndices;
+			this.boneWeights = boneWeights;
 		}
 
 		public float[] vertices() {
@@ -202,6 +213,18 @@ public final class AnimationClip {
 
 		public int argb() {
 			return this.argb;
+		}
+
+		public int[] boneIndices() {
+			return this.boneIndices;
+		}
+
+		public float[] boneWeights() {
+			return this.boneWeights;
+		}
+
+		public boolean skinned() {
+			return this.boneIndices != null && this.boneIndices.length == (this.vertices.length / 3) * 4;
 		}
 	}
 
