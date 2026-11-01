@@ -1,6 +1,5 @@
 package dev.dmitri.cinecorder.client;
 
-import dev.dmitri.cinecorder.CineCorderMath;
 import dev.dmitri.cinecorder.ProjectionRegistry;
 import dev.dmitri.cinecorder.block.ProjectorBlock;
 import dev.dmitri.cinecorder.block.ProjectorBlockEntity;
@@ -15,7 +14,6 @@ import net.minecraft.client.renderer.rendertype.RenderTypes;
 import net.minecraft.client.renderer.texture.OverlayTexture;
 import net.minecraft.core.BlockPos;
 import net.minecraft.resources.Identifier;
-import net.minecraft.util.LightCoordsUtil;
 import net.minecraft.world.level.block.state.BlockState;
 import net.minecraft.world.phys.Vec3;
 import com.mojang.blaze3d.vertex.PoseStack;
@@ -73,9 +71,13 @@ public final class SceneRenderer {
 		poseStack.mulPose(yawMatrix(yaw));
 
 		Matrix4f[] matrices = clip.worldMatrices(time);
+		// Render the projected scene at full brightness. It is a self-contained "film" with
+		// its own baked colours; taking the world light made huge floor planes pitch black
+		// when the projector stood in a cave, at night or next to terrain.
+		int light = 0xF000F0;
 
 		context.submitNodeCollector().submitCustomGeometry(poseStack, renderType(),
-				(pose, buffer) -> drawNodes(level, clip, matrices, pose.pose(), buffer, origin, yaw));
+				(pose, buffer) -> drawNodes(clip, matrices, pose.pose(), buffer, light));
 	}
 
 	private static RenderType renderType() {
@@ -104,8 +106,8 @@ public final class SceneRenderer {
 				0.0f, 0.0f, 0.0f, 1.0f);
 	}
 
-	private static void drawNodes(ClientLevel level, AnimationClip clip, Matrix4f[] matrices,
-			Matrix4f basePose, VertexConsumer buffer, Vec3 origin, float yaw) {
+	private static void drawNodes(AnimationClip clip, Matrix4f[] matrices, Matrix4f basePose,
+			VertexConsumer buffer, int light) {
 		Vector3f a = new Vector3f();
 		Vector3f b = new Vector3f();
 		Vector3f c = new Vector3f();
@@ -113,23 +115,6 @@ public final class SceneRenderer {
 
 		for (int index = 0; index < clip.nodes().size(); index++) {
 			Matrix4f matrix = new Matrix4f(basePose).mul(matrices[index]);
-
-			// Sample the world light at the centre of this node's geometry, so scenes sitting
-			// in a dark room are dark while outdoor scenes are fully lit. Using the node origin
-			// would be wrong for bones whose parts are offset far from the pivot.
-			Vector3f nodeCenter = new Vector3f();
-			int partCount = 0;
-			for (AnimationClip.Part part : clip.nodes().get(index).parts()) {
-				nodeCenter.add(part.from()).add(part.to()).mul(0.5f);
-				partCount++;
-			}
-			if (partCount > 0) {
-				nodeCenter.mul(1.0f / partCount);
-			}
-			matrices[index].transformPosition(nodeCenter);
-			Vec3 worldPosition = origin.add(CineCorderMath.rotateYaw(yaw,
-					new Vec3(nodeCenter.x, nodeCenter.y, nodeCenter.z))).add(0.0, 1.0, 0.0);
-			int light = LightCoordsUtil.getLightCoords(level, BlockPos.containing(worldPosition));
 
 			for (AnimationClip.Part part : clip.nodes().get(index).parts()) {
 				drawBox(buffer, matrix, part, light, a, b, c, d);
