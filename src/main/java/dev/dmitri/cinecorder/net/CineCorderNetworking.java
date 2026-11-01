@@ -3,6 +3,7 @@ package dev.dmitri.cinecorder.net;
 import java.nio.charset.StandardCharsets;
 import java.util.Map;
 import java.util.UUID;
+import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
 
 import dev.dmitri.cinecorder.CineCorder;
@@ -16,7 +17,9 @@ import net.minecraft.world.phys.Vec3;
 /** Payload registration and the server-side table/animation handlers. */
 public final class CineCorderNetworking {
 	private static final Map<UUID, Long> LAST_ANIMATION_REQUEST = new ConcurrentHashMap<>();
+	private static final Map<String, byte[]> COMPRESSED = new ConcurrentHashMap<>();
 	private static final long REQUEST_COOLDOWN_MS = 3000L;
+	private static final int MAX_CACHED_ANIMATIONS = 32;
 
 	private CineCorderNetworking() {
 	}
@@ -52,22 +55,45 @@ public final class CineCorderNetworking {
 				return;
 			}
 
-			try {
-				String json = AnimationStore.read(payload.id(), payload.source());
-				byte[] compressed = AnimationDataPayload.gzip(json.getBytes(StandardCharsets.UTF_8));
-				if (compressed.length > AnimationDataPayload.MAX_COMPRESSED) {
-					CineCorder.LOGGER.warn("Animation '{}' is too large to send ({} bytes compressed)",
-							payload.id(), compressed.length);
-					return;
-				}
-				ServerPlayNetworking.send(player,
-						new AnimationDataPayload(payload.id(), compressed));
-			} catch (Exception e) {
-				CineCorder.LOGGER.warn("Could not send animation '{}' to {}: {}", payload.id(),
-						player.getName().getString(), e.toString());
-				ServerPlayNetworking.send(player, new AnimationDataPayload(payload.id(), new byte[0]));
+			String key = payload.id().isEmpty() ? "source:" + payload.source() : payload.id();
+			byte[] cached = COMPRESSED.get(key);
+			if (cached != null) {
+				ServerPlayNetworking.send(player, new AnimationDataPayload(payload.id(), cached));
+				return;
 			}
+
+			// Reading and gzipping a multi-megabyte clip must not stall the server thread.
+			var server = context.server();
+			CompletableFuture.supplyAsync(() -> {
+				try {
+					String json = AnimationStore.read(payload.id(), payload.source());
+					byte[] compressed = AnimationDataPayload.gzip(json.getBytes(StandardCharsets.UTF_8));
+					if (compressed.length > AnimationDataPayload.MAX_COMPRESSED) {
+						CineCorder.LOGGER.warn("Animation '{}' is too large to send ({} bytes compressed)",
+								payload.id(), compressed.length);
+						return new byte[0];
+					}
+					if (COMPRESSED.size() < MAX_CACHED_ANIMATIONS) {
+						COMPRESSED.put(key, compressed);
+					}
+					return compressed;
+				} catch (Exception e) {
+					CineCorder.LOGGER.warn("Could not send animation '{}': {}", payload.id(), e.toString());
+					return new byte[0];
+				}
+			}).thenAccept(data -> server.execute(() -> {
+				try {
+					ServerPlayNetworking.send(player, new AnimationDataPayload(payload.id(), data));
+				} catch (Exception ignored) {
+					// Player disconnected while the animation was being prepared.
+				}
+			}));
 		});
+	}
+
+	public static void clearCaches() {
+		COMPRESSED.clear();
+		LAST_ANIMATION_REQUEST.clear();
 	}
 
 	public static void openTable(ServerPlayer player, AnimationTableBlockEntity table) {

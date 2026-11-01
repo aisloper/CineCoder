@@ -30,6 +30,11 @@ public class CineCorder implements ModInitializer {
 			}
 		});
 
+		ServerLifecycleEvents.SERVER_STOPPED.register(server -> {
+			CineCorderNetworking.clearCaches();
+			dev.dmitri.cinecorder.anim.AnimationStore.clear();
+		});
+
 		CommandRegistrationCallback.EVENT.register(CineCorderCommand::register);
 
 		LOGGER.info("CineCorder ready: drop .bcam or .blend files into {}", AnimationLibrary.directory());
