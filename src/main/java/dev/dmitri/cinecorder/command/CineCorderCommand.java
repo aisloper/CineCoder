@@ -7,7 +7,9 @@ import com.mojang.brigadier.CommandDispatcher;
 import com.mojang.brigadier.arguments.StringArgumentType;
 
 import dev.dmitri.cinecorder.ModRegistry;
+import dev.dmitri.cinecorder.block.AnimationTableBlockEntity;
 import dev.dmitri.cinecorder.block.ProjectorBlockEntity;
+import dev.dmitri.cinecorder.net.CineCorderNetworking;
 import dev.dmitri.cinecorder.anim.AnimationClip;
 import dev.dmitri.cinecorder.anim.AnimationException;
 import dev.dmitri.cinecorder.anim.AnimationLibrary;
@@ -46,6 +48,18 @@ public final class CineCorderCommand {
 						.then(Commands.argument("pos", BlockPosArgument.blockPos())
 								.executes(context -> stopProjection(context.getSource(),
 										BlockPosArgument.getLoadedBlockPos(context, "pos")))))
+				.then(Commands.literal("open")
+						.requires(Commands.<CommandSourceStack>hasPermission(Commands.LEVEL_GAMEMASTERS))
+						.then(Commands.argument("pos", BlockPosArgument.blockPos())
+								.executes(context -> open(context.getSource(),
+										BlockPosArgument.getLoadedBlockPos(context, "pos")))))
+				.then(Commands.literal("record")
+						.requires(Commands.<CommandSourceStack>hasPermission(Commands.LEVEL_GAMEMASTERS))
+						.then(Commands.argument("pos", BlockPosArgument.blockPos())
+								.then(Commands.argument("name", StringArgumentType.greedyString())
+										.executes(context -> record(context.getSource(),
+												BlockPosArgument.getLoadedBlockPos(context, "pos"),
+												StringArgumentType.getString(context, "name"))))))
 				.then(Commands.literal("give")
 						.requires(Commands.<CommandSourceStack>hasPermission(Commands.LEVEL_GAMEMASTERS))
 						.then(Commands.argument("file", StringArgumentType.greedyString())
@@ -90,11 +104,38 @@ public final class CineCorderCommand {
 		return 0;
 	}
 
+	private static int open(CommandSourceStack source, BlockPos pos) {
+		try {
+			ServerPlayer player = source.getPlayerOrException();
+			if (source.getLevel().getBlockEntity(pos) instanceof AnimationTableBlockEntity table) {
+				CineCorderNetworking.openTable(player, table);
+				return 1;
+			}
+			source.sendFailure(Component.translatable("cinecorder.command.no_table"));
+		} catch (Exception e) {
+			source.sendFailure(Component.translatable("cinecorder.command.no_table"));
+		}
+		return 0;
+	}
+
 	private static int reload(CommandSourceStack source) {
 		AnimationLibrary.reload();
 		int count = AnimationLibrary.files().size();
 		source.sendSuccess(() -> Component.translatable("cinecorder.command.reloaded", count), false);
 		return count;
+	}
+
+	private static int record(CommandSourceStack source, BlockPos pos, String name) {
+		try {
+			ServerPlayer player = source.getPlayerOrException();
+			if (source.getLevel().getBlockEntity(pos) instanceof AnimationTableBlockEntity table) {
+				return table.record(player, name) ? 1 : 0;
+			}
+			source.sendFailure(Component.translatable("cinecorder.command.no_table"));
+		} catch (Exception e) {
+			source.sendFailure(Component.translatable("cinecorder.command.no_table"));
+		}
+		return 0;
 	}
 
 	private static int give(CommandSourceStack source, String file) {

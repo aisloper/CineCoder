@@ -114,12 +114,21 @@ public final class SceneRenderer {
 		for (int index = 0; index < clip.nodes().size(); index++) {
 			Matrix4f matrix = new Matrix4f(basePose).mul(matrices[index]);
 
-			// Sample the world light where this node actually is, so scenes sitting in a dark
-			// room are dark while outdoor scenes are fully lit.
-			Vector3f nodePosition = new Vector3f(matrices[index].m30(), matrices[index].m31(),
-					matrices[index].m32());
+			// Sample the world light at the centre of this node's geometry, so scenes sitting
+			// in a dark room are dark while outdoor scenes are fully lit. Using the node origin
+			// would be wrong for bones whose parts are offset far from the pivot.
+			Vector3f nodeCenter = new Vector3f();
+			int partCount = 0;
+			for (AnimationClip.Part part : clip.nodes().get(index).parts()) {
+				nodeCenter.add(part.from()).add(part.to()).mul(0.5f);
+				partCount++;
+			}
+			if (partCount > 0) {
+				nodeCenter.mul(1.0f / partCount);
+			}
+			matrices[index].transformPosition(nodeCenter);
 			Vec3 worldPosition = origin.add(CineCorderMath.rotateYaw(yaw,
-					new Vec3(nodePosition.x, nodePosition.y, nodePosition.z))).add(0.0, 1.0, 0.0);
+					new Vec3(nodeCenter.x, nodeCenter.y, nodeCenter.z))).add(0.0, 1.0, 0.0);
 			int light = LightCoordsUtil.getLightCoords(level, BlockPos.containing(worldPosition));
 
 			for (AnimationClip.Part part : clip.nodes().get(index).parts()) {

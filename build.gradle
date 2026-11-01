@@ -38,6 +38,11 @@ processResources {
 	filesMatching("fabric.mod.json") {
 		expand "version": version
 	}
+
+	// Ship the Blender exporter so .blend conversion works on any server install.
+	from("tools/blender/cinecorder_export.py") {
+		into "assets/cinecorder/blender"
+	}
 }
 
 tasks.withType(JavaCompile).configureEach {

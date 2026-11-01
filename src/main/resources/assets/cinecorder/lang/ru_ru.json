@@ -29,5 +29,14 @@
   "cinecorder.command.not_found": "Анимация \"%s\" не найдена",
   "cinecorder.command.playing": "Показ запущен",
   "cinecorder.command.stopped": "Показ остановлен",
-  "cinecorder.command.no_projector": "По этой позиции нет проектора"
+  "cinecorder.command.no_projector": "По этой позиции нет проектора",
+  "cinecorder.table.title": "Стол аниматора",
+  "cinecorder.table.page": "Страница %s/%s - записей: %s",
+  "cinecorder.table.prev": "< Назад",
+  "cinecorder.table.next": "Вперёд >",
+  "cinecorder.table.hint": "Возьмите чистую кассету и нажмите на запись, чтобы скопировать её",
+  "cinecorder.table.converting": "(конвертация...)",
+  "cinecorder.table.need_blank": "Возьмите чистую кассету, чтобы записать анимацию",
+  "cinecorder.table.convert_wait": "Анимация пока недоступна: %s",
+  "cinecorder.command.no_table": "По этой позиции нет стола аниматора"
 }

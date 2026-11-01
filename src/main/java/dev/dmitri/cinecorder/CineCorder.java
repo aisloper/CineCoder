@@ -1,7 +1,9 @@
 package dev.dmitri.cinecorder;
 
 import dev.dmitri.cinecorder.anim.AnimationLibrary;
+import dev.dmitri.cinecorder.anim.BlendConverter;
 import dev.dmitri.cinecorder.command.CineCorderCommand;
+import dev.dmitri.cinecorder.net.CineCorderNetworking;
 import net.fabricmc.api.ModInitializer;
 import net.fabricmc.fabric.api.command.v2.CommandRegistrationCallback;
 import net.fabricmc.fabric.api.event.lifecycle.v1.ServerLifecycleEvents;
@@ -14,7 +16,11 @@ public class CineCorder implements ModInitializer {
 
 	@Override
 	public void onInitialize() {
+		CineCorderConfig.get();
 		ModRegistry.initialize();
+		CineCorderNetworking.registerPayloads();
+		CineCorderNetworking.registerServerReceivers();
+		BlendConverter.initialize();
 
 		ServerLifecycleEvents.SERVER_STARTED.register(server -> {
 			int installed = AnimationLibrary.installDemos();
@@ -26,6 +32,6 @@ public class CineCorder implements ModInitializer {
 
 		CommandRegistrationCallback.EVENT.register(CineCorderCommand::register);
 
-		LOGGER.info("CineCorder ready: drop .bcam files into {}", AnimationLibrary.directory());
+		LOGGER.info("CineCorder ready: drop .bcam or .blend files into {}", AnimationLibrary.directory());
 	}
 }

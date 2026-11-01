@@ -2,40 +2,37 @@
 CineCorder — Blender exporter
 =============================
 
-Exports the selected mesh objects and the active scene camera of the current frame range
-into a ``.bcam`` animation file understood by the CineCorder Minecraft mod.
+Exports the selected meshes (and their armature) plus the active scene camera into a ``.bcam``
+animation understood by the CineCorder Minecraft mod.
 
 Installation
 ------------
-1. Open Blender -> Edit -> Preferences -> Add-ons -> Install...
-2. Select this file (``cinecorder_export.py``) and enable "CineCorder Animation Exporter".
-3. Use File -> Export -> CineCorder Animation (.bcam).
+1. Blender -> Edit -> Preferences -> Add-ons -> Install... -> select this file.
+2. Enable "CineCorder Animation Exporter".
+3. File -> Export -> CineCorder Animation (.bcam).
 
-Notes
+Headless (used automatically by the mod for ``.blend`` files)
+--------------------------------------------------------------
+    blender --background scene.blend --factory-startup --python-exit-code 1 \
+        --python cinecorder_export.py -- --output out.bcam --all --step 1
+
+Modes
 -----
-* Every mesh object becomes one node with a single box part (its local bounding box), which
-  keeps the export fast and gives the blocky Minecraft look. Split your model into several
-  objects if you want several moving boxes (wheels, legs, ...).
-* Transforms are baked per frame, so animation can come from keyframes, drivers, constraints
-  or parenting.
-* Coordinates are converted from Blender (Z up, -Y forward) to Minecraft (Y up, +Z south).
-  One Blender unit equals one Minecraft block by default (see the Scale option).
-* The scene origin becomes the projector block position. Place your set around the Blender
-  world origin (or use the offset fields).
+* Skinned meshes (armature modifier / vertex groups): every armature bone becomes a hierarchical
+  node, and the mesh is split into rigid chunks per dominant bone. This is true skeletal
+  animation - bones inherit their parents, each chunk follows its bone.
+* Other meshes: each object becomes one node with its local bounding box, animated by its baked
+  world transform.
+
+Coordinates are converted from Blender (Z up, -Y forward) to Minecraft (Y up, +Z south).
+One Blender unit equals one Minecraft block by default. The Blender world origin becomes the
+projector block centre.
 """
 
-bl_info = {
-    "name": "CineCorder Animation Exporter",
-    "author": "dmitri",
-    "version": (1, 0, 0),
-    "blender": (4, 0, 0),
-    "location": "File > Export > CineCorder Animation (.bcam)",
-    "description": "Export animated meshes and the camera as a .bcam file for the CineCorder mod",
-    "category": "Import-Export",
-}
-
+import argparse
 import json
 import math
+import sys
 
 import bpy
 from bpy.props import BoolProperty, FloatProperty, IntProperty, StringProperty
@@ -43,18 +40,48 @@ from bpy.types import Operator
 from bpy_extras.io_utils import ExportHelper
 from mathutils import Matrix, Vector
 
+bl_info = {
+    "name": "CineCorder Animation Exporter",
+    "author": "dmitri",
+    "version": (1, 1, 0),
+    "blender": (4, 0, 0),
+    "location": "File > Export > CineCorder Animation (.bcam)",
+    "description": "Export animated meshes, armatures and the camera as a .bcam file",
+    "category": "Import-Export",
+}
+
 # Change of basis: Minecraft (x, y, z) -> Blender (x, -z, y)
-TO_BLENDER = Matrix(((1.0, 0.0, 0.0), (0.0, 0.0, -1.0), (0.0, 1.0, 0.0)))
+BASIS = Matrix(((1.0, 0.0, 0.0, 0.0), (0.0, 0.0, -1.0, 0.0), (0.0, 1.0, 0.0, 0.0), (0.0, 0.0, 0.0, 1.0)))
+BASIS3 = BASIS.to_3x3()
 
 
 def to_mc(vector):
     """Blender vector -> Minecraft vector."""
-    return [float(vector.x), float(vector.z), float(-vector.y)]
+    return Vector((float(vector.x), float(vector.z), float(-vector.y)))
 
 
-def to_mc_rotation(matrix3):
-    """Blender rotation matrix -> Minecraft rotation matrix."""
-    return TO_BLENDER @ matrix3 @ TO_BLENDER.transposed()
+def mc_matrix(matrix):
+    """Blender 4x4 -> Minecraft 4x4."""
+    return BASIS @ matrix @ BASIS.inverted()
+
+
+def mc_rotation(matrix3):
+    return BASIS3 @ matrix3 @ BASIS3.transposed()
+
+
+def trs_from_mc(matrix, scale=1.0, offset=(0.0, 0.0, 0.0), add_offset=True):
+    location, rotation, size = matrix.decompose()
+    euler = rotation.to_euler("XYZ")
+    ox, oy, oz = offset if add_offset else (0.0, 0.0, 0.0)
+    return {
+        "pos": [round(location.x * scale + ox, 5),
+                round(location.y * scale + oy, 5),
+                round(location.z * scale + oz, 5)],
+        "rot": [round(math.degrees(euler.x), 4),
+                round(math.degrees(euler.y), 4),
+                round(math.degrees(euler.z), 4)],
+        "scale": [round(size.x, 5), round(size.y, 5), round(size.z, 5)],
+    }
 
 
 def base_color(obj):
@@ -72,16 +99,152 @@ def base_color(obj):
     return [0.8, 0.8, 0.8, 1.0]
 
 
-def local_box(obj):
-    """Local-space bounding box of an object as (min, max)."""
+def compress(keys):
+    """Drops consecutive keys that repeat the previous transform."""
+    if not keys:
+        return []
+    result = [keys[0]]
+    for key in keys[1:]:
+        previous = result[-1]
+        changed = any(abs(key[field][i] - previous[field][i]) > 1.0e-4
+                      for field in ("pos", "rot", "scale") for i in range(3))
+        if changed:
+            result.append(key)
+    return result
+
+
+def ordered_bones(armature):
+    """Bones in parent-before-child order as (bone, parent_index)."""
+    result = []
+
+    def visit(bone, parent_index):
+        index = len(result)
+        result.append((bone, parent_index))
+        for child in bone.children:
+            visit(child, index)
+
+    for bone in armature.data.bones:
+        if bone.parent is None:
+            visit(bone, -1)
+    return result
+
+
+def find_armature(obj):
+    for modifier in obj.modifiers:
+        if modifier.type == "ARMATURE" and modifier.object is not None:
+            return modifier.object
+    if obj.parent is not None and obj.parent.type == "ARMATURE":
+        return obj.parent
+    return None
+
+
+def build_bone_nodes(armature, frames, scene, fps, frame_start, scale, offset):
+    bones = ordered_bones(armature)
+    bone_index = {bone.name: index for index, (bone, _) in enumerate(bones)}
+    armature_world = armature.matrix_world
+    nodes = []
+
+    for index, (bone, parent) in enumerate(bones):
+        keys = []
+        for frame in frames:
+            scene.frame_set(frame)
+            pose = armature_world @ armature.pose.bones[bone.name].matrix
+            if parent >= 0:
+                parent_bone = bones[parent][0]
+                parent_pose = armature_world @ armature.pose.bones[parent_bone.name].matrix
+                local = parent_pose.inverted() @ pose
+            else:
+                local = pose
+            key = trs_from_mc(mc_matrix(local), scale, offset, add_offset=(parent < 0))
+            key["t"] = round((frame - frame_start) / fps, 5)
+            keys.append(key)
+
+        nodes.append({
+            "name": bone.name,
+            "parent": parent,
+            "pivot": [0.0, 0.0, 0.0],
+            "parts": [],
+            "keys": compress(keys),
+        })
+
+    return nodes, bone_index
+
+
+def skeletal_parts(obj, armature, bone_index, scale, scene, frame_start):
+    """Splits a skinned mesh into rigid chunks, one per dominant bone."""
+    scene.frame_set(frame_start)
+    mesh = obj.data
+    group_names = {group.index: group.name for group in obj.vertex_groups}
+    buckets = {}
+
+    for vertex in mesh.vertices:
+        if not vertex.groups:
+            continue
+        best = max(vertex.groups, key=lambda element: element.weight)
+        if best.weight < 0.25:
+            continue
+        name = group_names.get(best.group)
+        if name is None or name not in bone_index:
+            continue
+        buckets.setdefault(name, []).append(vertex.index)
+
+    armature_world = armature.matrix_world
+    object_world = obj.matrix_world
+    color = base_color(obj)
+    result = {}
+
+    for bone_name, indices in buckets.items():
+        bone = armature.data.bones[bone_name]
+        rest = mc_matrix(armature_world @ bone.matrix_local)
+        inverse = rest.inverted()
+        points = []
+        for index in indices:
+            world = object_world @ mesh.vertices[index].co
+            points.append(inverse @ to_mc(world))
+        if not points:
+            continue
+        low = [min(point[i] for point in points) * scale for i in range(3)]
+        high = [max(point[i] for point in points) * scale for i in range(3)]
+        result.setdefault(bone_name, []).append({
+            "from": [round(value, 5) for value in low],
+            "to": [round(value, 5) for value in high],
+            "color": color,
+        })
+
+    return result
+
+
+def build_object_node(obj, frames, scene, fps, frame_start, scale, offset):
     corners = [Vector(corner) for corner in obj.bound_box]
-    minimum = Vector((min(c.x for c in corners), min(c.y for c in corners), min(c.z for c in corners)))
-    maximum = Vector((max(c.x for c in corners), max(c.y for c in corners), max(c.z for c in corners)))
-    return minimum, maximum
+    local_min = Vector((min(c.x for c in corners), min(c.y for c in corners), min(c.z for c in corners)))
+    local_max = Vector((max(c.x for c in corners), max(c.y for c in corners), max(c.z for c in corners)))
+    a = to_mc(local_min)
+    b = to_mc(local_max)
+    low = [min(a[i], b[i]) * scale for i in range(3)]
+    high = [max(a[i], b[i]) * scale for i in range(3)]
+
+    keys = []
+    for frame in frames:
+        scene.frame_set(frame)
+        key = trs_from_mc(mc_matrix(obj.matrix_world), scale, offset)
+        key["t"] = round((frame - frame_start) / fps, 5)
+        keys.append(key)
+
+    return {
+        "name": obj.name,
+        "parent": -1,
+        "pivot": [0.0, 0.0, 0.0],
+        "parts": [{
+            "from": [round(value, 5) for value in low],
+            "to": [round(value, 5) for value in high],
+            "color": base_color(obj),
+        }],
+        "keys": compress(keys),
+    }
 
 
 def export_animation(context, filepath, use_selection=True, step=1, scene_scale=1.0,
-                     offset=(0.0, 0.0, 0.0), include_camera=True):
+                     offset=(0.0, 0.0, 0.0), include_camera=True, name=None):
     scene = context.scene
     frame_start = int(scene.frame_start)
     frame_end = int(scene.frame_end)
@@ -89,87 +252,86 @@ def export_animation(context, filepath, use_selection=True, step=1, scene_scale=
         frame_start, frame_end = frame_end, frame_start
     fps = float(scene.render.fps) / max(1.0, float(scene.render.fps_base))
 
-    objects = [obj for obj in context.selected_objects if obj.type == "MESH"]
-    if not use_selection or not objects:
-        objects = [obj for obj in scene.objects if obj.type == "MESH"]
-    if not objects:
+    meshes = [obj for obj in context.selected_objects if obj.type == "MESH" and not obj.hide_render]
+    if not use_selection or not meshes:
+        meshes = [obj for obj in scene.objects if obj.type == "MESH" and not obj.hide_render]
+    if not meshes:
         raise RuntimeError("No mesh objects to export")
 
-    camera = scene.camera if include_camera else None
     frames = list(range(frame_start, frame_end + 1, max(1, int(step))))
     if frames[-1] != frame_end:
         frames.append(frame_end)
 
+    armatures = {}
+    for obj in meshes:
+        armature = find_armature(obj)
+        if armature is not None:
+            armatures[armature.name] = armature
+
+    armature_data = {}
+    for armature_name, armature in armatures.items():
+        nodes, bone_index = build_bone_nodes(armature, frames, scene, fps, frame_start,
+                                             scene_scale, offset)
+        armature_data[armature_name] = {"nodes": nodes, "index": bone_index, "armature": armature}
+
+    extra_nodes = []
+    for obj in meshes:
+        armature = find_armature(obj)
+        if armature is not None and armature.name in armature_data:
+            data = armature_data[armature.name]
+            parts = skeletal_parts(obj, armature, data["index"], scene_scale, scene, frame_start)
+            if parts:
+                for bone_name, bone_parts in parts.items():
+                    data["nodes"][data["index"][bone_name]]["parts"].extend(bone_parts)
+            else:
+                # Mesh parented to a bone but without usable vertex groups: bake its own transform.
+                extra_nodes.append(build_object_node(obj, frames, scene, fps, frame_start,
+                                                     scene_scale, offset))
+        else:
+            extra_nodes.append(build_object_node(obj, frames, scene, fps, frame_start,
+                                                 scene_scale, offset))
+
     nodes = []
-    for obj in objects:
-        minimum, maximum = local_box(obj)
-        position = to_mc(minimum)
-        size = to_mc(maximum)
-        # to_mc flips an axis; rebuild the box from the two converted corners
-        low = [min(position[i], size[i]) for i in range(3)]
-        high = [max(position[i], size[i]) for i in range(3)]
-
-        keys = []
-        for frame in frames:
-            scene.frame_set(frame)
-            matrix = obj.matrix_world
-            translation = matrix.translation
-            mc_translation = Vector((
-                translation.x * scene_scale + offset[0],
-                translation.z * scene_scale + offset[1],
-                -translation.y * scene_scale + offset[2],
-            ))
-            euler = to_mc_rotation(matrix.to_3x3()).to_euler("XYZ")
-            keys.append({
-                "t": round((frame - frame_start) / fps, 5),
-                "pos": round_list(mc_translation),
-                "rot": [round(math.degrees(euler.x), 4),
-                        round(math.degrees(euler.y), 4),
-                        round(math.degrees(euler.z), 4)],
-                "scale": round_list(matrix.to_scale()),
-            })
-
-        nodes.append({
-            "name": obj.name,
-            "parent": -1,
-            "pivot": [0.0, 0.0, 0.0],
-            "parts": [{
-                "from": [round(v * scene_scale, 5) for v in low],
-                "to": [round(v * scene_scale, 5) for v in high],
-                "color": base_color(obj),
-            }],
-            "keys": keys,
-        })
+    for data in armature_data.values():
+        base = len(nodes)
+        for node in data["nodes"]:
+            if node["parent"] >= 0:
+                node["parent"] += base
+            nodes.append(node)
+    nodes.extend(extra_nodes)
 
     document = {
         "format": "cinecorder/1",
-        "name": bpy.path.basename(filepath).rsplit(".", 1)[0] if filepath else scene.name,
+        "name": name or (bpy.path.basename(filepath).rsplit(".", 1)[0] if filepath else scene.name),
         "fps": round(fps, 4),
         "duration": round((frame_end - frame_start) / fps, 5),
         "loop": bool(scene.get("cinecorder_loop", False)),
         "nodes": nodes,
     }
 
+    camera = scene.camera if include_camera else None
     if camera is not None:
         camera_keys = []
         for frame in frames:
             scene.frame_set(frame)
             matrix = camera.matrix_world
-            translation = matrix.translation
             position = Vector((
-                translation.x * scene_scale + offset[0],
-                translation.z * scene_scale + offset[1],
-                -translation.y * scene_scale + offset[2],
+                matrix.translation.x * scene_scale + offset[0],
+                matrix.translation.z * scene_scale + offset[1],
+                -matrix.translation.y * scene_scale + offset[2],
             ))
-            direction = to_mc_rotation(matrix.to_3x3()) @ Vector((0.0, 0.0, -1.0))
+            direction = to_mc(matrix.to_3x3() @ Vector((0.0, 0.0, -1.0)))
             direction.normalize()
             look = position + direction * 2.0
             camera_keys.append({
                 "t": round((frame - frame_start) / fps, 5),
-                "pos": round_list(position),
-                "look": round_list(look),
+                "pos": [round(value, 5) for value in position],
+                "look": [round(value, 5) for value in look],
             })
-        document["camera"] = {"fov": float(camera.data.angle_x * 180.0 / math.pi), "keys": camera_keys}
+        document["camera"] = {
+            "fov": float(camera.data.angle_x * 180.0 / math.pi),
+            "keys": camera_keys,
+        }
 
     scene.frame_set(frame_start)
 
@@ -177,10 +339,6 @@ def export_animation(context, filepath, use_selection=True, step=1, scene_scale=
         json.dump(document, handle, indent=1)
         handle.write("\n")
     return len(nodes)
-
-
-def round_list(vector):
-    return [round(float(v), 5) for v in vector]
 
 
 class CINECORDER_OT_export(Operator, ExportHelper):
@@ -213,11 +371,12 @@ class CINECORDER_OT_export(Operator, ExportHelper):
             count = export_animation(
                 context, self.filepath, self.use_selection, self.step, self.scene_scale,
                 (self.offset_x, self.offset_y, self.offset_z), self.include_camera)
-        except Exception as error:  # noqa: BLE001 - report to the Blender UI
+        except Exception as error:  # noqa: BLE001 - reported in the Blender UI
             self.report({"ERROR"}, str(error))
             return {"CANCELLED"}
         self.report({"INFO"}, "Exported %d node(s) to %s" % (count, self.filepath))
         return {"FINISHED"}
+
 
 def menu_export(self, context):
     self.layout.operator(CINECORDER_OT_export.bl_idname, text="CineCorder Animation (.bcam)")
@@ -238,5 +397,23 @@ def unregister():
         bpy.utils.unregister_class(cls)
 
 
+def run_cli(argv):
+    parser = argparse.ArgumentParser(prog="cinecorder-export")
+    parser.add_argument("--output", required=True)
+    parser.add_argument("--step", type=int, default=1)
+    parser.add_argument("--scale", type=float, default=1.0)
+    parser.add_argument("--all", action="store_true")
+    parser.add_argument("--name", default=None)
+    args = parser.parse_args(argv)
+
+    count = export_animation(bpy.context, args.output, use_selection=not args.all,
+                             step=args.step, scene_scale=args.scale, name=args.name)
+    print("CINECORDER_EXPORT_OK", count)
+
+
 if __name__ == "__main__":
-    register()
+    arguments = sys.argv[sys.argv.index("--") + 1:] if "--" in sys.argv else []
+    if any(argument.startswith("--output") for argument in arguments):
+        run_cli(arguments)
+    else:
+        register()
