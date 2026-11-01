@@ -20,6 +20,8 @@ public final class CineCorderConfig {
 	public String blenderPath = "blender";
 	public int blenderTimeoutSeconds = 300;
 	public int blendFrameStep = 1;
+	public String blendMeshDetail = "auto";
+	public int blendTriangleBudget = 40000;
 	public boolean convertBlendFiles = true;
 
 	public static Path file() {

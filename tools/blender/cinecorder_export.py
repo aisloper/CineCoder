@@ -35,7 +35,7 @@ import math
 import sys
 
 import bpy
-from bpy.props import BoolProperty, FloatProperty, IntProperty, StringProperty
+from bpy.props import BoolProperty, EnumProperty, FloatProperty, IntProperty, StringProperty
 from bpy.types import Operator
 from bpy_extras.io_utils import ExportHelper
 from mathutils import Matrix, Vector
@@ -80,11 +80,8 @@ def trs_from_mc(matrix, scale=1.0, offset=(0.0, 0.0, 0.0), add_offset=True):
     }
 
 
-def base_color(obj):
-    for slot in obj.material_slots:
-        material = slot.material
-        if material is None:
-            continue
+def material_color(material):
+    if material is not None:
         if material.use_nodes and material.node_tree is not None:
             for node in material.node_tree.nodes:
                 if node.type == "BSDF_PRINCIPLED":
@@ -93,6 +90,122 @@ def base_color(obj):
         color = material.diffuse_color
         return [float(color[0]), float(color[1]), float(color[2]), 1.0]
     return [0.8, 0.8, 0.8, 1.0]
+
+
+def base_color(obj):
+    for slot in obj.material_slots:
+        if slot.material is not None:
+            return material_color(slot.material)
+    return [0.8, 0.8, 0.8, 1.0]
+
+
+def object_material_color(obj, index):
+    if 0 <= index < len(obj.material_slots):
+        return material_color(obj.material_slots[index].material)
+    return [0.8, 0.8, 0.8, 1.0]
+
+
+def triangle_count(obj):
+    mesh = obj.data
+    mesh.calc_loop_triangles()
+    return len(mesh.loop_triangles)
+
+
+def object_volume(obj):
+    corners = [obj.matrix_world @ Vector(corner) for corner in obj.bound_box]
+    dims = [max(c[i] for c in corners) - min(c[i] for c in corners) for i in range(3)]
+    return max(0.0, dims[0] * dims[1] * dims[2])
+
+
+def build_mesh(obj, scale):
+    """Triangles of an unskinned object in node-local space, grouped by material."""
+    mesh = obj.data
+    mesh.calc_loop_triangles()
+    groups = {}
+    for triangle in mesh.loop_triangles:
+        groups.setdefault(triangle.material_index, []).append(tuple(triangle.vertices))
+
+    result = []
+    for material_index, triangles in groups.items():
+        index_map = {}
+        vertices = []
+        indices = []
+        for triangle in triangles:
+            for vertex_index in triangle:
+                mapped = index_map.get(vertex_index)
+                if mapped is None:
+                    mapped = len(index_map)
+                    index_map[vertex_index] = mapped
+                    co = to_mc(mesh.vertices[vertex_index].co)
+                    vertices.extend([round(co.x * scale, 5), round(co.y * scale, 5),
+                                     round(co.z * scale, 5)])
+                indices.append(mapped)
+        if indices:
+            result.append({
+                "vertices": vertices,
+                "indices": indices,
+                "color": object_material_color(obj, material_index),
+            })
+    return result
+
+
+def skinned_mesh_data(obj, armature, bone_index, scale, scene, frame_start):
+    """Triangles of a skinned mesh, split per dominant bone and material."""
+    scene.frame_set(frame_start)
+    mesh = obj.data
+    mesh.calc_loop_triangles()
+    group_names = {group.index: group.name for group in obj.vertex_groups}
+
+    vertex_bone = {}
+    for vertex in mesh.vertices:
+        if not vertex.groups:
+            continue
+        best = max(vertex.groups, key=lambda element: element.weight)
+        if best.weight < 0.25:
+            continue
+        name = group_names.get(best.group)
+        if name in bone_index:
+            vertex_bone[vertex.index] = name
+
+    groups = {}
+    for triangle in mesh.loop_triangles:
+        votes = {}
+        for vertex_index in triangle.vertices:
+            name = vertex_bone.get(vertex_index)
+            if name is not None:
+                votes[name] = votes.get(name, 0) + 1
+        if not votes:
+            continue
+        bone_name = max(votes, key=votes.get)
+        groups.setdefault((bone_name, triangle.material_index), []).append(tuple(triangle.vertices))
+
+    armature_world = armature.matrix_world
+    object_world = obj.matrix_world
+    result = {}
+    for (bone_name, material_index), triangles in groups.items():
+        bone = armature.data.bones[bone_name]
+        rest = mc_matrix(armature_world @ bone.matrix_local)
+        inverse = rest.inverted()
+        index_map = {}
+        vertices = []
+        indices = []
+        for triangle in triangles:
+            for vertex_index in triangle:
+                mapped = index_map.get(vertex_index)
+                if mapped is None:
+                    mapped = len(index_map)
+                    index_map[vertex_index] = mapped
+                    world = object_world @ mesh.vertices[vertex_index].co
+                    local = inverse @ to_mc(world)
+                    vertices.extend([round(local.x * scale, 5), round(local.y * scale, 5),
+                                     round(local.z * scale, 5)])
+                indices.append(mapped)
+        result.setdefault(bone_name, []).append({
+            "vertices": vertices,
+            "indices": indices,
+            "color": object_material_color(obj, material_index),
+        })
+    return result
 
 
 def compress(keys):
@@ -146,6 +259,7 @@ def bone_skeleton(armature, scale, offset):
             "parent": parent,
             "pivot": [0.0, 0.0, 0.0],
             "parts": [],
+            "meshes": [],
             "keys": [],
         })
 
@@ -240,6 +354,7 @@ def object_node(obj, scale):
             "to": [round(value, 5) for value in high],
             "color": base_color(obj),
         }],
+        "meshes": [],
         "keys": [],
     }
 
@@ -262,7 +377,8 @@ def camera_key(camera, time, scale, offset):
 
 
 def export_animation(context, filepath, use_selection=True, step=1, scene_scale=1.0,
-                     offset=(0.0, 0.0, 0.0), include_camera=True, name=None):
+                     offset=(0.0, 0.0, 0.0), include_camera=True, name=None,
+                     mesh_detail="auto", triangle_budget=40000):
     scene = context.scene
     frame_start = int(scene.frame_start)
     frame_end = int(scene.frame_end)
@@ -290,19 +406,51 @@ def export_animation(context, filepath, use_selection=True, step=1, scene_scale=
         if armature is not None and armature.name not in armature_data:
             armature_data[armature.name] = bone_skeleton(armature, scene_scale, offset)
 
+    # Decide which objects get real triangles. Big detailed props (coffee machines, vehicles)
+    # are rendered as meshes; tiny background objects stay boxes to keep the scene affordable.
+    mesh_detail = (mesh_detail or "auto").lower()
+    mesh_objects = set()
+    if mesh_detail != "boxes":
+        candidates = []
+        for obj in meshes:
+            tris = triangle_count(obj)
+            if tris > 0:
+                candidates.append((object_volume(obj), tris, obj))
+        candidates.sort(key=lambda item: item[0], reverse=True)
+        remaining = max(0, int(triangle_budget))
+        for volume, tris, obj in candidates:
+            if mesh_detail == "auto" and volume < 0.3:
+                continue
+            if tris > remaining or tris > 60000:
+                continue
+            mesh_objects.add(obj.name)
+            remaining -= tris
+
     # Skeletal chunks are computed once, in the rest pose.
     extra_objects = []
     for obj in meshes:
         armature = find_armature(obj)
         if armature is not None and armature.name in armature_data:
             data = armature_data[armature.name]
+            if obj.name in mesh_objects:
+                bone_meshes = skinned_mesh_data(obj, armature, data["index"], scene_scale, scene, frame_start)
+                if bone_meshes:
+                    for bone_name, meshes_for_bone in bone_meshes.items():
+                        data["nodes"][data["index"][bone_name]]["meshes"].extend(meshes_for_bone)
+                    continue
             parts = skeletal_parts(obj, armature, data["index"], scene_scale, scene, frame_start)
             if parts:
                 for bone_name, bone_parts in parts.items():
                     data["nodes"][data["index"][bone_name]]["parts"].extend(bone_parts)
                 continue
         # No usable armature/vertex groups: bake the object's own world transform.
-        extra_objects.append((object_node(obj, scene_scale), obj))
+        node = object_node(obj, scene_scale)
+        if obj.name in mesh_objects:
+            node_meshes = build_mesh(obj, scene_scale)
+            if node_meshes:
+                node["meshes"] = node_meshes
+                node["parts"] = []
+        extra_objects.append((node, obj))
 
     camera = scene.camera if include_camera else None
     camera_keys = []
@@ -391,12 +539,24 @@ class CINECORDER_OT_export(Operator, ExportHelper):
     include_camera: BoolProperty(
         name="Export scene camera", default=True,
         description="Write the camera path so players are switched into it during playback")
+    mesh_detail: EnumProperty(
+        name="Mesh detail",
+        items=[
+            ("auto", "Auto", "Triangles for large props, boxes for tiny background objects"),
+            ("triangles", "Triangles", "Export all meshes within the triangle budget as triangles"),
+            ("boxes", "Boxes only", "Export every mesh as a single bounding box"),
+        ],
+        default="auto")
+    triangle_budget: IntProperty(
+        name="Triangle budget", default=40000, min=0, max=2000000,
+        description="Maximum number of triangles exported as real meshes")
 
     def execute(self, context):
         try:
             count = export_animation(
                 context, self.filepath, self.use_selection, self.step, self.scene_scale,
-                (self.offset_x, self.offset_y, self.offset_z), self.include_camera)
+                (self.offset_x, self.offset_y, self.offset_z), self.include_camera,
+                mesh_detail=self.mesh_detail, triangle_budget=self.triangle_budget)
         except Exception as error:  # noqa: BLE001 - reported in the Blender UI
             self.report({"ERROR"}, str(error))
             return {"CANCELLED"}
@@ -430,10 +590,13 @@ def run_cli(argv):
     parser.add_argument("--scale", type=float, default=1.0)
     parser.add_argument("--all", action="store_true")
     parser.add_argument("--name", default=None)
+    parser.add_argument("--mesh-detail", choices=["auto", "triangles", "boxes"], default="auto")
+    parser.add_argument("--triangle-budget", type=int, default=40000)
     args = parser.parse_args(argv)
 
     count = export_animation(bpy.context, args.output, use_selection=not args.all,
-                             step=args.step, scene_scale=args.scale, name=args.name)
+                             step=args.step, scene_scale=args.scale, name=args.name,
+                             mesh_detail=args.mesh_detail, triangle_budget=args.triangle_budget)
     print("CINECORDER_EXPORT_OK", count)
 
 

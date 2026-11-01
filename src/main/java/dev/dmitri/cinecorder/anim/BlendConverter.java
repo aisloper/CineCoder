@@ -31,7 +31,7 @@ import dev.dmitri.cinecorder.CineCorderConfig;
  */
 public final class BlendConverter {
 	private static final String SCRIPT_RESOURCE = "/assets/cinecorder/blender/cinecorder_export.py";
-	private static final int CACHE_VERSION = 4;
+	private static final int CACHE_VERSION = 5;
 	private static final Set<Path> PENDING = ConcurrentHashMap.newKeySet();
 	private static final Map<Path, String> ERRORS = new ConcurrentHashMap<>();
 	private static final ExecutorService EXECUTOR = Executors.newSingleThreadExecutor(runnable -> {
@@ -126,6 +126,10 @@ public final class BlendConverter {
 		command.add(String.valueOf(Math.max(1, config.blendFrameStep)));
 		command.add("--name");
 		command.add(baseName(blend));
+		command.add("--mesh-detail");
+		command.add(config.blendMeshDetail == null ? "auto" : config.blendMeshDetail);
+		command.add("--triangle-budget");
+		command.add(String.valueOf(Math.max(0, config.blendTriangleBudget)));
 
 		CineCorder.LOGGER.info("Converting {} with Blender (timeout {}s): {}", blend.getFileName(),
 				config.blenderTimeoutSeconds, config.blenderPath);

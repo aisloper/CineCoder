@@ -119,7 +119,62 @@ public final class SceneRenderer {
 			for (AnimationClip.Part part : clip.nodes().get(index).parts()) {
 				drawBox(buffer, matrix, part, light, a, b, c, d);
 			}
+			for (AnimationClip.Mesh mesh : clip.nodes().get(index).meshes()) {
+				drawMesh(buffer, matrix, mesh, light, a, b, c);
+			}
 		}
+	}
+
+	private static void drawMesh(VertexConsumer buffer, Matrix4f matrix, AnimationClip.Mesh mesh,
+			int light, Vector3f a, Vector3f b, Vector3f c) {
+		float[] vertices = mesh.vertices();
+		int[] indices = mesh.indices();
+		int color = mesh.argb();
+
+		for (int i = 0; i + 2 < indices.length; i += 3) {
+			int ia = indices[i] * 3;
+			int ib = indices[i + 1] * 3;
+			int ic = indices[i + 2] * 3;
+			a.set(vertices[ia], vertices[ia + 1], vertices[ia + 2]);
+			b.set(vertices[ib], vertices[ib + 1], vertices[ib + 2]);
+			c.set(vertices[ic], vertices[ic + 1], vertices[ic + 2]);
+			matrix.transformPosition(a);
+			matrix.transformPosition(b);
+			matrix.transformPosition(c);
+
+			float abx = b.x - a.x;
+			float aby = b.y - a.y;
+			float abz = b.z - a.z;
+			float acx = c.x - a.x;
+			float acy = c.y - a.y;
+			float acz = c.z - a.z;
+			float nx = aby * acz - abz * acy;
+			float ny = abz * acx - abx * acz;
+			float nz = abx * acy - aby * acx;
+			float length = (float) Math.sqrt(nx * nx + ny * ny + nz * nz);
+			if (length < 1.0e-6f) {
+				continue;
+			}
+			nx /= length;
+			ny /= length;
+			nz /= length;
+
+			triangle(buffer, a, b, c, nx, ny, nz, color, light);
+			// Most Blender materials are double-sided; draw the back face as well.
+			triangle(buffer, a, c, b, -nx, -ny, -nz, color, light);
+		}
+	}
+
+	private static void triangle(VertexConsumer buffer, Vector3f a, Vector3f b, Vector3f c,
+			float nx, float ny, float nz, int color, int light) {
+		buffer.addVertex(a.x, a.y, a.z, color, 0.0f, 0.0f, OverlayTexture.NO_OVERLAY, light,
+				nx, ny, nz);
+		buffer.addVertex(b.x, b.y, b.z, color, 1.0f, 0.0f, OverlayTexture.NO_OVERLAY, light,
+				nx, ny, nz);
+		buffer.addVertex(c.x, c.y, c.z, color, 1.0f, 1.0f, OverlayTexture.NO_OVERLAY, light,
+				nx, ny, nz);
+		buffer.addVertex(c.x, c.y, c.z, color, 0.0f, 1.0f, OverlayTexture.NO_OVERLAY, light,
+				nx, ny, nz);
 	}
 
 	private static void drawBox(VertexConsumer buffer, Matrix4f matrix, AnimationClip.Part part, int light,

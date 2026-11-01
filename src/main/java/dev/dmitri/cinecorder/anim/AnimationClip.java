@@ -100,13 +100,16 @@ public final class AnimationClip {
 		private final int parent;
 		private final Vector3f pivot;
 		private final List<Part> parts;
+		private final List<Mesh> meshes;
 		private final List<Key> keys;
 
-		public Node(String name, int parent, Vector3f pivot, List<Part> parts, List<Key> keys) {
+		public Node(String name, int parent, Vector3f pivot, List<Part> parts, List<Mesh> meshes,
+				List<Key> keys) {
 			this.name = name;
 			this.parent = parent;
 			this.pivot = pivot;
 			this.parts = List.copyOf(parts);
+			this.meshes = List.copyOf(meshes);
 			this.keys = List.copyOf(keys);
 		}
 
@@ -120,6 +123,10 @@ public final class AnimationClip {
 
 		public List<Part> parts() {
 			return parts;
+		}
+
+		public List<Mesh> meshes() {
+			return meshes;
 		}
 
 		public List<Key> keys() {
@@ -171,6 +178,31 @@ public final class AnimationClip {
 	}
 
 	public record Part(Vector3f from, Vector3f to, int argb) {
+	}
+
+	/** Arbitrary triangle geometry in node-local space, for meshes that are not boxes. */
+	public static final class Mesh {
+		private final float[] vertices;
+		private final int[] indices;
+		private final int argb;
+
+		public Mesh(float[] vertices, int[] indices, int argb) {
+			this.vertices = vertices;
+			this.indices = indices;
+			this.argb = argb;
+		}
+
+		public float[] vertices() {
+			return this.vertices;
+		}
+
+		public int[] indices() {
+			return this.indices;
+		}
+
+		public int argb() {
+			return this.argb;
+		}
 	}
 
 	public record Key(double time, Transform transform, boolean step) {

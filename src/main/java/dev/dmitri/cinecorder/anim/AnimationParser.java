@@ -73,8 +73,39 @@ public final class AnimationParser {
 				}
 			}
 
-			if (parts.isEmpty()) {
-				throw new AnimationException("Node '" + nodeName + "' has no parts (box meshes)");
+			List<AnimationClip.Mesh> meshes = new ArrayList<>();
+			JsonArray meshArray = optArray(nodeObject, "meshes");
+			if (meshArray != null) {
+				for (int m = 0; m < meshArray.size(); m++) {
+					JsonObject meshObject = asObject(meshArray.get(m), "meshes[" + m + "]");
+					JsonArray vertexArray = optArray(meshObject, "vertices");
+					JsonArray indexArray = optArray(meshObject, "indices");
+					if (vertexArray == null || indexArray == null) {
+						throw new AnimationException("Mesh needs 'vertices' and 'indices'");
+					}
+					if (vertexArray.size() % 3 != 0 || indexArray.size() % 3 != 0) {
+						throw new AnimationException("Mesh vertices and indices must be triples");
+					}
+					if (vertexArray.size() > 3_000_000 || indexArray.size() > 3_000_000) {
+						throw new AnimationException("Mesh is too large");
+					}
+
+					float[] vertices = new float[vertexArray.size()];
+					for (int v = 0; v < vertices.length; v++) {
+						vertices[v] = (float) (vertexArray.get(v).getAsDouble() * scale);
+					}
+					int[] indices = new int[indexArray.size()];
+					int vertexCount = vertices.length / 3;
+					for (int v = 0; v < indices.length; v++) {
+						int index = indexArray.get(v).getAsInt();
+						if (index < 0 || index >= vertexCount) {
+							throw new AnimationException("Mesh index out of range");
+						}
+						indices[v] = index;
+					}
+					meshes.add(new AnimationClip.Mesh(vertices, indices,
+							optColor(meshObject, "color", 0xFFCCCCCC)));
+				}
 			}
 
 			List<AnimationClip.Key> keys = new ArrayList<>();
@@ -93,7 +124,7 @@ public final class AnimationParser {
 				}
 			}
 
-			nodes.add(new AnimationClip.Node(nodeName, parent, pivot, parts,
+			nodes.add(new AnimationClip.Node(nodeName, parent, pivot, parts, meshes,
 					AnimationClip.keysFrom(keys)));
 		}
 
