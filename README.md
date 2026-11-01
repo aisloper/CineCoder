@@ -298,3 +298,4 @@ src/client/java/dev/dmitri/cinecorder/client/
 tools/blender/     аддон-экспортёр (он же используется для headless-конвертации)
 tools/gen_textures.py  генератор пиксель-арт текстур
 ```
+# ЭТОТ МОД ПОЛНОСТЬЮ AIAIAIAIAI SLOP, а если вы хотите что-то добавить, предложить идею или у вас ошибка то пишите я попытаюсь помочь
