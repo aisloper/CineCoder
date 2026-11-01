@@ -1,0 +1,18 @@
+{
+  "type": "minecraft:crafting_shaped",
+  "category": "misc",
+  "pattern": [
+    "PPP",
+    "G G",
+    "III"
+  ],
+  "key": {
+    "P": "minecraft:oak_planks",
+    "G": "minecraft:glass_pane",
+    "I": "minecraft:iron_ingot"
+  },
+  "result": {
+    "id": "cinecorder:animation_table",
+    "count": 1
+  }
+}

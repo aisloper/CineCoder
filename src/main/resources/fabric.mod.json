@@ -1,0 +1,30 @@
+{
+	"schemaVersion": 1,
+	"id": "cinecorder",
+	"version": "${version}",
+	"name": "CineCorder",
+	"description": "Record 3D animations from Blender onto cassettes and project them into the world with a real cinematic camera.",
+	"authors": [
+		"dmitri"
+	],
+	"contact": {
+		"homepage": "https://example.invalid/cinecorder"
+	},
+	"license": "MIT",
+	"icon": "assets/cinecorder/icon.png",
+	"environment": "*",
+	"entrypoints": {
+		"main": [
+			"dev.dmitri.cinecorder.CineCorder"
+		],
+		"client": [
+			"dev.dmitri.cinecorder.client.CineCorderClient"
+		]
+	},
+	"depends": {
+		"fabricloader": ">=0.20.1",
+		"minecraft": "~26.3",
+		"java": ">=25",
+		"fabric-api": "*"
+	}
+}

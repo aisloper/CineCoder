@@ -1,0 +1,17 @@
+{
+  "type": "minecraft:crafting_shaped",
+  "category": "misc",
+  "pattern": [
+    "NNN",
+    "NBN",
+    "NNN"
+  ],
+  "key": {
+    "N": "minecraft:iron_nugget",
+    "B": "minecraft:black_dye"
+  },
+  "result": {
+    "id": "cinecorder:blank_cassette",
+    "count": 2
+  }
+}

@@ -1,0 +1,31 @@
+{
+  "variants": {
+    "facing=north,active=false": {
+      "model": "cinecorder:block/projector"
+    },
+    "facing=north,active=true": {
+      "model": "cinecorder:block/invisible"
+    },
+    "facing=south,active=false": {
+      "model": "cinecorder:block/projector",
+      "y": 180
+    },
+    "facing=south,active=true": {
+      "model": "cinecorder:block/invisible"
+    },
+    "facing=west,active=false": {
+      "model": "cinecorder:block/projector",
+      "y": 270
+    },
+    "facing=west,active=true": {
+      "model": "cinecorder:block/invisible"
+    },
+    "facing=east,active=false": {
+      "model": "cinecorder:block/projector",
+      "y": 90
+    },
+    "facing=east,active=true": {
+      "model": "cinecorder:block/invisible"
+    }
+  }
+}
