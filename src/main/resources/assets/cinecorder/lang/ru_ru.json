@@ -38,5 +38,6 @@
   "cinecorder.table.converting": "(конвертация...)",
   "cinecorder.table.need_blank": "Возьмите чистую кассету, чтобы записать анимацию",
   "cinecorder.table.convert_wait": "Анимация пока недоступна: %s",
-  "cinecorder.command.no_table": "По этой позиции нет стола аниматора"
+  "cinecorder.command.no_table": "По этой позиции нет стола аниматора",
+  "cinecorder.projector.data_missing": "Данных анимации для этой кассеты нет на этом сервере"
 }

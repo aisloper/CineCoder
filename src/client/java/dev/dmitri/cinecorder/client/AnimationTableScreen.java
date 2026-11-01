@@ -72,6 +72,9 @@ public class AnimationTableScreen extends Screen {
 			return Component.literal(entry.title() + "  ")
 					.append(Component.translatable("cinecorder.table.converting").withStyle(ChatFormatting.GRAY));
 		}
+		if (entry.ticks() < 0) {
+			return Component.literal(entry.title());
+		}
 		Component duration = Component.literal(String.format("  %.1fs", entry.seconds()))
 				.withStyle(ChatFormatting.DARK_GRAY);
 		return Component.literal(entry.title()).append(duration);

@@ -126,6 +126,10 @@ public final class AnimationLibrary {
 
 	private static TableEntry describe(Path path, String name) {
 		try {
+			// Do not parse huge clips just to show their duration in the GUI.
+			if (Files.size(path) > 8L * 1024 * 1024) {
+				return new TableEntry(name, name, -1, false, true);
+			}
 			AnimationClip clip = parse(path, name);
 			return new TableEntry(name, clip.name(), clip.durationTicks(), clip.loop(), true);
 		} catch (RuntimeException | IOException e) {

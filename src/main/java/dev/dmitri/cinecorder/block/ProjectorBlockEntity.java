@@ -12,8 +12,10 @@ import dev.dmitri.cinecorder.CineCorder;
 import dev.dmitri.cinecorder.CineCorderMath;
 import dev.dmitri.cinecorder.ModRegistry;
 import dev.dmitri.cinecorder.ProjectionRegistry;
+import dev.dmitri.cinecorder.anim.AnimationCache;
 import dev.dmitri.cinecorder.anim.AnimationClip;
-import dev.dmitri.cinecorder.anim.AnimationException;
+import dev.dmitri.cinecorder.anim.AnimationParser;
+import dev.dmitri.cinecorder.anim.AnimationStore;
 import dev.dmitri.cinecorder.entity.CameraRigEntity;
 import dev.dmitri.cinecorder.item.CassetteData;
 import net.minecraft.core.BlockPos;
@@ -48,6 +50,7 @@ public class ProjectorBlockEntity extends BlockEntity {
 	private long startGameTime;
 	private int durationTicks = 20;
 	private boolean loop;
+	private CassetteData.Content content;
 	private AnimationClip clip;
 	private boolean clipParsed;
 	private boolean removing;
@@ -74,12 +77,15 @@ public class ProjectorBlockEntity extends BlockEntity {
 
 	public void insertCassette(ItemStack stack) {
 		this.cassette = stack.copyWithCount(1);
+		this.content = CassetteData.read(this.cassette).orElse(null);
 		this.clipParsed = false;
 		this.clip = null;
-		parseClip();
-		if (clip != null) {
-			this.durationTicks = clip.durationTicks();
-			this.loop = clip.loop();
+		if (this.content != null) {
+			this.durationTicks = Math.max(1, this.content.ticks());
+			this.loop = this.content.loop();
+			if (this.level != null && !this.level.isClientSide()) {
+				parseServerClip(this.content);
+			}
 		}
 		sync();
 	}
@@ -87,6 +93,7 @@ public class ProjectorBlockEntity extends BlockEntity {
 	public ItemStack removeCassette() {
 		ItemStack removed = this.cassette;
 		this.cassette = ItemStack.EMPTY;
+		this.content = null;
 		this.clip = null;
 		this.clipParsed = true;
 		stop();
@@ -95,30 +102,40 @@ public class ProjectorBlockEntity extends BlockEntity {
 	}
 
 	public AnimationClip clip() {
-		if (!clipParsed) {
-			parseClip();
+		if (this.content == null && !this.cassette.isEmpty()) {
+			this.content = CassetteData.read(this.cassette).orElse(null);
 		}
-		return clip;
+		if (this.content == null) {
+			return null;
+		}
+
+		if (this.level != null && this.level.isClientSide()) {
+			// Fetches the (possibly large) animation from the server on first use and caches it.
+			return AnimationCache.get(this.content);
+		}
+
+		if (!this.clipParsed) {
+			parseServerClip(this.content);
+		}
+		return this.clip;
 	}
 
-	private void parseClip() {
+	private void parseServerClip(CassetteData.Content source) {
 		this.clipParsed = true;
 		this.clip = null;
-		if (cassette.isEmpty()) {
-			return;
-		}
 		try {
-			this.clip = CassetteData.read(cassette).map(content -> {
-				try {
-					return content.parse();
-				} catch (AnimationException e) {
-					CineCorder.LOGGER.warn("Cassette at {} contains a broken animation: {}",
-							this.worldPosition, e.getMessage());
-					return null;
-				}
-			}).orElse(null);
-		} catch (RuntimeException e) {
-			CineCorder.LOGGER.warn("Could not read cassette at {}", this.worldPosition, e);
+			if (source.hasInline()) {
+				this.clip = AnimationParser.parse(source.inlineJson(), source.title());
+			} else {
+				this.clip = AnimationStore.load(source.id(), source.source());
+			}
+		} catch (Exception e) {
+			CineCorder.LOGGER.warn("Could not load animation '{}' for projector at {}: {}",
+					source.id(), this.worldPosition, e.toString());
+		}
+		if (this.clip != null) {
+			this.durationTicks = this.clip.durationTicks();
+			this.loop = this.clip.loop();
 		}
 	}
 
@@ -143,7 +160,8 @@ public class ProjectorBlockEntity extends BlockEntity {
 
 		AnimationClip current = clip();
 		if (current == null) {
-			player.sendOverlayMessage(net.minecraft.network.chat.Component.translatable("cinecorder.projector.no_tape"));
+			player.sendOverlayMessage(net.minecraft.network.chat.Component.translatable(
+					hasCassette() ? "cinecorder.projector.data_missing" : "cinecorder.projector.no_tape"));
 			return;
 		}
 
@@ -382,13 +400,17 @@ public class ProjectorBlockEntity extends BlockEntity {
 	protected void loadAdditional(ValueInput input) {
 		super.loadAdditional(input);
 		this.cassette = input.read("Cassette", ItemStack.CODEC).orElse(ItemStack.EMPTY);
+		this.content = CassetteData.read(this.cassette).orElse(null);
 		this.playing = input.getBooleanOr("Playing", false);
 		this.startGameTime = input.getLongOr("Start", 0L);
+		this.clip = null;
 		this.clipParsed = false;
-		parseClip();
-		if (this.clip != null) {
-			this.durationTicks = this.clip.durationTicks();
-			this.loop = this.clip.loop();
+		if (this.content != null) {
+			this.durationTicks = Math.max(1, this.content.ticks());
+			this.loop = this.content.loop();
+			if (this.level != null && !this.level.isClientSide()) {
+				parseServerClip(this.content);
+			}
 		}
 		if (this.level != null && this.level.isClientSide()) {
 			ProjectionRegistry.add(this);

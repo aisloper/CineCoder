@@ -14,6 +14,7 @@ import dev.dmitri.cinecorder.anim.AnimationClip;
 import dev.dmitri.cinecorder.anim.AnimationException;
 import dev.dmitri.cinecorder.anim.AnimationLibrary;
 import dev.dmitri.cinecorder.anim.AnimationParser;
+import dev.dmitri.cinecorder.anim.AnimationStore;
 import dev.dmitri.cinecorder.item.CassetteData;
 import net.minecraft.ChatFormatting;
 import net.minecraft.commands.CommandBuildContext;
@@ -143,8 +144,9 @@ public final class CineCorderCommand {
 			ServerPlayer player = source.getPlayerOrException();
 			String json = AnimationLibrary.read(file);
 			AnimationClip clip = AnimationParser.parse(json, file);
+			String id = AnimationStore.store(json, file);
 			ItemStack cassette = new ItemStack(ModRegistry.ANIMATION_CASSETTE);
-			CassetteData.write(cassette, clip, json);
+			CassetteData.write(cassette, id, file, clip);
 			if (!player.getInventory().add(cassette)) {
 				player.drop(cassette, false, Prediction.SERVER_ONLY);
 			}

@@ -8,6 +8,7 @@ import dev.dmitri.cinecorder.anim.AnimationClip;
 import dev.dmitri.cinecorder.anim.AnimationException;
 import dev.dmitri.cinecorder.anim.AnimationLibrary;
 import dev.dmitri.cinecorder.anim.AnimationParser;
+import dev.dmitri.cinecorder.anim.AnimationStore;
 import dev.dmitri.cinecorder.item.CassetteData;
 import net.minecraft.ChatFormatting;
 import net.minecraft.core.BlockPos;
@@ -78,8 +79,9 @@ public class AnimationTableBlockEntity extends BlockEntity {
 		try {
 			String json = AnimationLibrary.read(name);
 			AnimationClip clip = AnimationParser.parse(json, name);
+			String id = AnimationStore.store(json, name);
 			ItemStack recorded = new ItemStack(ModRegistry.ANIMATION_CASSETTE);
-			CassetteData.write(recorded, clip, json);
+			CassetteData.write(recorded, id, name, clip);
 
 			if (held.stack().getCount() > 1) {
 				held.stack().shrink(1);
