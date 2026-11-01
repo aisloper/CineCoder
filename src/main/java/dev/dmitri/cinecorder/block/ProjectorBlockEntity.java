@@ -264,7 +264,7 @@ public class ProjectorBlockEntity extends BlockEntity {
 	private void keepViewersSeated(ServerLevel server) {
 		for (UUID id : new ArrayList<>(this.viewers)) {
 			ServerPlayer player = server.getServer().getPlayerList().getPlayer(id);
-			if (player == null || player.isRemoved() || player.level() != server
+			if (player == null || player.isRemoved() || player.isDeadOrDying() || player.level() != server
 					|| player.isShiftKeyDown()
 					|| player.position().distanceToSqr(Vec3.atCenterOf(this.worldPosition))
 							> VIEWER_RANGE * VIEWER_RANGE) {

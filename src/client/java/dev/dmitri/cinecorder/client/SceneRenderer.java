@@ -1,5 +1,6 @@
 package dev.dmitri.cinecorder.client;
 
+import dev.dmitri.cinecorder.CineCorderMath;
 import dev.dmitri.cinecorder.ProjectionRegistry;
 import dev.dmitri.cinecorder.block.ProjectorBlock;
 import dev.dmitri.cinecorder.block.ProjectorBlockEntity;
@@ -30,7 +31,7 @@ import org.joml.Vector3f;
 public final class SceneRenderer {
 	private static final Identifier WHITE = Identifier.fromNamespaceAndPath("cinecorder",
 			"textures/scene/white.png");
-	private static final RenderType RENDER_TYPE = RenderTypes.entitySolid(WHITE);
+	private static RenderType renderType;
 
 	private SceneRenderer() {
 	}
@@ -72,10 +73,16 @@ public final class SceneRenderer {
 		poseStack.mulPose(yawMatrix(yaw));
 
 		Matrix4f[] matrices = clip.worldMatrices(time);
-		int light = LightCoordsUtil.getLightCoords(level, pos);
 
-		context.submitNodeCollector().submitCustomGeometry(poseStack, RENDER_TYPE,
-				(pose, buffer) -> drawNodes(clip, matrices, pose.pose(), buffer, light));
+		context.submitNodeCollector().submitCustomGeometry(poseStack, renderType(),
+				(pose, buffer) -> drawNodes(level, clip, matrices, pose.pose(), buffer, origin, yaw));
+	}
+
+	private static RenderType renderType() {
+		if (renderType == null) {
+			renderType = RenderTypes.entitySolid(WHITE);
+		}
+		return renderType;
 	}
 
 	private static float yawOf(BlockState state) {
@@ -97,8 +104,8 @@ public final class SceneRenderer {
 				0.0f, 0.0f, 0.0f, 1.0f);
 	}
 
-	private static void drawNodes(AnimationClip clip, Matrix4f[] matrices, Matrix4f basePose,
-			VertexConsumer buffer, int light) {
+	private static void drawNodes(ClientLevel level, AnimationClip clip, Matrix4f[] matrices,
+			Matrix4f basePose, VertexConsumer buffer, Vec3 origin, float yaw) {
 		Vector3f a = new Vector3f();
 		Vector3f b = new Vector3f();
 		Vector3f c = new Vector3f();
@@ -106,6 +113,15 @@ public final class SceneRenderer {
 
 		for (int index = 0; index < clip.nodes().size(); index++) {
 			Matrix4f matrix = new Matrix4f(basePose).mul(matrices[index]);
+
+			// Sample the world light where this node actually is, so scenes sitting in a dark
+			// room are dark while outdoor scenes are fully lit.
+			Vector3f nodePosition = new Vector3f(matrices[index].m30(), matrices[index].m31(),
+					matrices[index].m32());
+			Vec3 worldPosition = origin.add(CineCorderMath.rotateYaw(yaw,
+					new Vec3(nodePosition.x, nodePosition.y, nodePosition.z))).add(0.0, 1.0, 0.0);
+			int light = LightCoordsUtil.getLightCoords(level, BlockPos.containing(worldPosition));
+
 			for (AnimationClip.Part part : clip.nodes().get(index).parts()) {
 				drawBox(buffer, matrix, part, light, a, b, c, d);
 			}

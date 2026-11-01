@@ -26,5 +26,11 @@
 		"minecraft": "~26.3",
 		"java": ">=25",
 		"fabric-api": "*"
-	}
+	},
+	"mixins": [
+		{
+			"config": "cinecorder.client.mixins.json",
+			"environment": "client"
+		}
+	]
 }

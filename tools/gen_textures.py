@@ -146,7 +146,41 @@ def projector_front():
     return img
 
 
+ICON_ROOT = os.path.join(os.path.dirname(__file__), "..", "src/main/resources/assets/cinecorder")
+
+
+def white():
+    return [[(255, 255, 255, 255) for _ in range(16)] for _ in range(16)]
+
+
+def icon():
+    size = 64
+    img = blank(size, (18, 20, 26, 255))
+    for y in range(size):
+        for x in range(size):
+            d = max(abs(x - 31.5), abs(y - 31.5)) / 31.5
+            r, g, b, a = img[y][x]
+            k = 1 - 0.35 * d
+            img[y][x] = (int(r * k), int(g * k), int(b * k), 255)
+    rect(img, 6, 14, 58, 52, (0, 0, 0, 0))
+    rect(img, 7, 15, 57, 51, (52, 56, 66, 255))
+    rect(img, 8, 16, 56, 48, (74, 79, 92, 255))
+    rect(img, 13, 18, 51, 32, (92, 170, 222, 255))
+    rect(img, 15, 20, 49, 23, (140, 205, 240, 255))
+    for cx in (22, 42):
+        for y in range(34, 46):
+            for x in range(cx - 6, cx + 6):
+                if (x - cx) ** 2 + (y - 40) ** 2 < 30:
+                    img[y][x] = (28, 30, 36, 255)
+                if (x - cx) ** 2 + (y - 40) ** 2 < 8:
+                    img[y][x] = (214, 216, 222, 255)
+    rect(img, 10, 50, 54, 54, (255, 170, 80, 255))
+    return img
+
+
 def main():
+    write_png(os.path.join(ROOT, "scene/white.png"), white())
+    write_png(os.path.join(ICON_ROOT, "icon.png"), icon())
     write_png(os.path.join(ROOT, "item/blank_cassette.png"),
               cassette((208, 206, 198, 255), (176, 174, 166, 255)))
     write_png(os.path.join(ROOT, "item/animation_cassette.png"),
