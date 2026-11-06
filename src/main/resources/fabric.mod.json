@@ -5,7 +5,7 @@
 	"name": "CineCorder",
 	"description": "Record 3D animations from Blender onto cassettes and project them into the world with a real cinematic camera.",
 	"authors": [
-		"dmitri"
+		"CineCorder contributors"
 	],
 	"contact": {
 		"homepage": "https://example.invalid/cinecorder"
@@ -15,10 +15,10 @@
 	"environment": "*",
 	"entrypoints": {
 		"main": [
-			"dev.dmitri.cinecorder.CineCorder"
+			"dev.cinecorder.CineCorder"
 		],
 		"client": [
-			"dev.dmitri.cinecorder.client.CineCorderClient"
+			"dev.cinecorder.client.CineCorderClient"
 		]
 	},
 	"depends": {

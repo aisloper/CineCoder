@@ -42,7 +42,7 @@ from mathutils import Matrix, Vector
 
 bl_info = {
     "name": "CineCorder Animation Exporter",
-    "author": "dmitri",
+    "author": "CineCorder contributors",
     "version": (1, 2, 0),
     "blender": (4, 0, 0),
     "location": "File > Export > CineCorder Animation (.bcam)",
@@ -590,7 +590,8 @@ def export_animation(context, filepath, use_selection=True, step=1, scene_scale=
         nodes.append(node)
 
     document = {
-        "format": "cinecorder/1",
+        "format": "cinecorder/2",
+        "formatVersion": 2,
         "name": name or (bpy.path.basename(filepath).rsplit(".", 1)[0] if filepath else scene.name),
         "fps": round(fps, 4),
         "duration": round((frame_end - frame_start) / fps, 5),

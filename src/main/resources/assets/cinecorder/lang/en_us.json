@@ -39,5 +39,7 @@
   "cinecorder.table.need_blank": "Hold a blank cassette to record an animation",
   "cinecorder.table.convert_wait": "Cannot read the animation yet: %s",
   "cinecorder.command.no_table": "No animation table at that position",
-  "cinecorder.projector.data_missing": "Animation data for this cassette is missing on this server"
+  "cinecorder.projector.data_missing": "Animation data for this cassette is missing on this server",
+  "cinecorder.command.rebuilt": "Rebuilt %s cassette animation(s) to the current format",
+  "cinecorder.command.rebuild_pending": "Conversions run in the background; run /cinecorder rebuild again in a few seconds for the rest"
 }

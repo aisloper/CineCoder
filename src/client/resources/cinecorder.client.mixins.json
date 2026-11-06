@@ -1,7 +1,7 @@
 {
   "required": true,
   "minVersion": "0.8",
-  "package": "dev.dmitri.cinecorder.client.mixin",
+  "package": "dev.cinecorder.client.mixin",
   "compatibilityLevel": "JAVA_21",
   "client": [
     "HudMixin"
