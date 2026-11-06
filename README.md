@@ -283,19 +283,4 @@ JSON (см. `src/main/resources/assets/cinecorder/demo/demo_show.bcam`):
 * `.blend` требует установленного Blender на сервере; конвертация запускается по требованию.
 * Показ идёт по серверному времени (20 тиков/с); на лагающем сервере возможен рассинхрон.
 
-## Структура проекта
-
-```
-src/main/java/dev/dmitri/cinecorder/
-  anim/            формат .bcam, парсер, библиотека, конвертер .blend, хранилище и кэш клипов
-  block/           стол аниматора, проектор (+ block entities)
-  item/            кассеты и их данные
-  entity/          сущность-камера
-  net/             пакеты GUI стола и потоковой передачи анимаций
-  command/         /cinecorder
-src/client/java/dev/dmitri/cinecorder/client/
-  SceneRenderer.java, AnimationTableScreen.java, HudMixin.java
-tools/blender/     аддон-экспортёр (он же используется для headless-конвертации)
-tools/gen_textures.py  генератор пиксель-арт текстур
-```
 # ЭТОТ МОД ПОЛНОСТЬЮ AIAIAIAIAI SLOP, а если вы хотите что-то добавить, предложить идею или у вас ошибка то пишите я попытаюсь помочь
